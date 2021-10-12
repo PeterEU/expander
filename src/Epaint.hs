@@ -1,5 +1,5 @@
 {-
-Module      : Epaint (update from July 20, 2021)
+Module      : Epaint (update from September 6, 2021)
 Copyright   : (c) Peter Padawitz and Jos Kusiek, 2021
 License     : BSD3
 Stability   : experimental
@@ -38,7 +38,6 @@ data Solver = Solver
     { addSpec         :: Bool -> FilePath -> Action
                                        -- adds a specification from a file
     , backWin         :: Action        -- minimizes a solver window
-    , iconify         :: Action        -- minimizes a solver window
     , bigWin          :: Action 
     , checkInSolver   :: Action
     , drawCurr        :: Action        -- draws the current tree
@@ -221,9 +220,8 @@ scanner act = do
             stopScan0' = stopScan' >> writeIORef asRef []
             stopScan' = do
                 running <- readIORef runningRef
-                when running $ do
-                    runnableStop =<< readIORef runRef
-                    writeIORef runningRef False
+                when running $ do runnableStop =<< readIORef runRef
+                                  writeIORef runningRef False
         in Scanner
             { startScan0 = startScan0'
             , startScan  = startScan'
@@ -236,21 +234,98 @@ scanner act = do
             
 -- used by drawPict,scaleAndDraw
 
-data WidgStore = WidgStore
-    { saveWidg :: String -> Widget_ -> Action
-    , loadWidg :: String -> Request Widget_
-    }
+-- PAINTER types
 
-widgStore :: Template WidgStore                                      -- not used
-widgStore = do
-    storeRef <- newIORef $ const Skip
-    return WidgStore
-        { saveWidg = \file w -> do store <- readIORef storeRef
-                                   writeIORef storeRef $ upd store file w
-        , loadWidg = \file -> do
-            store <- readIORef storeRef
-            return $ store file
-        }
+type Point  = (Double,Double)
+type Point3 = (Double,Double,Double)
+type Line_  = (Point,Point)
+type Lines  = [Line_]
+type Path   = [Point]
+type State  = (Point,Double,Color,Int) -- (center,orientation,hue,lightness)
+ 
+type Graph   = (Picture,Arcs)
+type Picture = [Widget_]
+type Arcs    = [[Int]]
+ 
+type TermW   = Term Widget_
+type TermSPI = Term (String,Point,Int)
+
+-- ([w1,...,wn],[as1,...,asn]) :: Graph represents a graph with node set 
+-- {w1,...,wn} and edge set {(wi,wj) | j in asi, 1 <= i,j <= n}.
+
+data Widget_ = Arc State ArcStyleType Double Double | Bunch Widget_ [Int] |
+               Dot Color Point | Fast Widget_ | Gif Int Bool String Widget_ |
+               New | Tria State Double | Text_ State Int [String] [Int] | 
+               Oval State Double Double | Path State Int Path | 
+               Path0 Color Int Int Path | Poly State Int [Double] Double | 
+               Rect State Double Double | Repeat Widget_ | Skip | 
+               Tree State Color Sizes Pos TermS | TreeW State TermW |
+               Turtle State Double TurtleActs deriving (Read,Show,Eq)
+
+-- Bunch w poss combines w with the arcs from w to the widgets at positions 
+-- poss.
+-- The Int parameter of Text_ is the text height.
+-- The center of Tree{W} .. ct agrees with the root of ct.
+
+instance Root Widget_ where undef = Skip
+
+type TurtleActs = [TurtleAct]
+data TurtleAct  = Jump Double | JumpA Double | Move Double | MoveA Double | 
+                  Open Color Int | Scale Double | Turn Double | 
+                  Widg Bool Widget_ | Close | Draw deriving (Read,Show,Eq)
+                  
+-- JumpA and MoveA ignore the scale of the enclosing turtle.
+-- The Int parameter of Open determines the mode of the path ending when the 
+-- next Close/Draw command is reached; see drawWidget (Path0 c i m ps).
+-- Widg False w ignores the orientation of w.
+-- Widg True w adds it to the orientation of the enclosing turtle.
+-- Close and Draw finish a polygon resp. path starting at the preceding Open 
+-- command.
+
+type WidgTrans = Widget_ -> Widget_
+type PictTrans = Picture -> Picture
+
+isWidg :: Widget_ -> Bool
+isWidg Dot {}         = True
+isWidg Oval {}        = True
+isWidg Path {}        = True
+isWidg (Poly _ m _ _) = m < 6        -- poly/S/W/SW/F/SF
+isWidg Rect {}        = True
+isWidg Tria {}        = True
+isWidg _              = False
+
+isPict :: Widget_ -> Bool
+isPict (Poly _ m _ _) = m > 5        -- polyR/L/T/LT
+isPict Turtle {}      = True
+isPict _              = False
+
+isTurtle :: Widget_ -> Bool
+isTurtle Turtle {} = True
+isTurtle _         = False
+
+isFast :: Widget_ -> Bool
+isFast (Fast _) = True
+isFast _        = False
+
+isTreeW :: Widget_ -> Bool
+isTreeW TreeW {} = True
+isTreeW _        = False
+
+isRedDot :: Widget_ -> Bool
+isRedDot (Bunch w _)           = isRedDot w
+isRedDot (Dot (RGB 255 0 0) _) = True
+isRedDot _                     = False
+
+isSkip :: Widget_ -> Bool
+isSkip (Bunch w _) = isSkip w
+isSkip Skip        = True
+isSkip _           = False
+
+propNode :: Widget_ -> Bool
+propNode = not . (isRedDot ||| isSkip)
+
+propNodes :: [Widget_] -> [Int]
+propNodes pict = [i | i <- indices_ pict, propNode $ pict!!i]
 
 -- PAINTER messages
 
@@ -290,13 +365,13 @@ type MenuOpts   = MenuItem -> IORef (ConnectId MenuItem) -> Action
 
 data Painter = Painter
   { buildPaint     :: Bool -> Action
-  , callPaint      :: [Picture] -> [Int] -> Bool -> Int -> String -> Action
+  , callPaint      :: [Picture] -> [Int] -> Bool -> Int -> String -> Pos
+                                                        -> String -> Action
   , getNewCheck    :: Request Bool
   , labSolver      :: String -> Action
   , remote         :: Action
   , setButton      :: Int -> ButtonOpts -> Action
   , setCurrInPaint :: Int -> Action
-  , setEval        :: String -> Pos -> Action
   , setNewCheck    :: Action
   }
 
@@ -338,22 +413,21 @@ painter pheight solveRef solve2Ref = do
     
     stopButSignalRef <- newIORef $ error "undefined stopButSignalRef"
     
-    -- canvSizeRef <- newIORef (0, 0)
-    colorScaleRef <- newIORef (0, [])
+    -- canvSizeRef <- newIORef (0,0)
+    colorScaleRef <- newIORef (0,[])
     colsRef <- newIORef 0
     currRef <- newIORef 0
     -- delayRef <- newIORef 1
     drawModeRef <- newIORef 0
     gradeRef <- newIORef 0
     noOfGraphsRef <- newIORef 0
-    spreadRef <- newIORef (0, 0)
+    spreadRef <- newIORef (0,0)
     
     oldRscaleRef <- newIORef 1
     rscaleRef <- newIORef 1
     scaleRef <- newIORef 1
     
-    arrangeModeRef <- newIORef ""
-    picEvalRef <- newIORef ""
+    arrangeModeRef <- newIORef "t1"
     bgcolorRef <- newIORef white
     
     changedWidgetsRef <- newIORef nil2
@@ -381,8 +455,7 @@ painter pheight solveRef solve2Ref = do
     targetRef <- newIORef Nothing
     bunchpictRef <- newIORef Nothing
     
-    let
-        addOrRemove = do
+    let addOrRemove = do
             file <- saveEnt `gtkGet` entryText
             pictures <- readIORef picturesRef
             curr <- readIORef currRef
@@ -410,8 +483,8 @@ painter pheight solveRef solve2Ref = do
                 spread <- readIORef spreadRef
                 grade <- readIORef gradeRef
                 arrangeMode <- readIORef arrangeModeRef
-                let f sc pict = concatGraphs spread grade arrangeMode
-                                          [graph,(scalePict (1/sc) pict,arcs')]
+                let f sc pict = concatGraphs arrangeMode spread grade 
+                                           [graph,(scalePict (1/sc) pict,arcs')]
                     msg = file ++ if null pict' then " is not a graph."
                                                 else " has been added."
                 rect <- readIORef rectRef
@@ -428,72 +501,60 @@ painter pheight solveRef solve2Ref = do
                         setCurrGraph $ f scale pict'
                 scaleAndDraw msg
         
-        arrangeButton graph@(pict,arcs) = do 
-            mode <- modeEnt `gtkGet` entryText
-            case mode of
-                "perm" -> do
-                    old <- readIORef permutationRef
-                    modifyIORef permutationRef nextPerm
-                    arrangeMode <- readIORef arrangeModeRef
-                    permutation <- readIORef permutationRef
-                    setCurrGraph $ if (isTree ||| isCenter) arrangeMode 
-                                   then (permuteTree old permutation,arcs)
-                                   else permutePositions graph old permutation
-                    scaleAndDraw "The widgets have been permuted."
-                _ -> do
-                    case mode of
-                         x:y:r | x `elem` "amrt" -> 
-                              do writeIORef arrangeModeRef [x,y]
-                                 let colsNo = parse pnat r; angle = parse real r
-                                 writeIORef colsRef $ Haskell.fromMaybe 
-                                                      (square pict) colsNo
-                                 writeIORef gradeRef $ Haskell.fromMaybe 0 angle
-                         _ -> writeIORef arrangeModeRef mode
-                    d <- spaceEnt `gtkGet` entryText
-                    arrangeMode <- readIORef arrangeModeRef
-                    let dist = parse real d; x = head arrangeMode
-                    when (notnull arrangeMode) $ do
-                      if just dist
-                        then writeIORef spreadRef $ apply2 (*(get dist)) (10,10)
-                        else when (x == 'm') $ writeIORef spreadRef (0,0)
-                      when (x `elem` "acmort") $ arrangeGraph False act graph
-            where
-                act gr = do
-                    setCurrGraph gr
-                    scaleAndDraw "The widgets have been arranged."
-                permuteTree is ks = fold2 exchgWidgets pict ss ts
-                    where (ss,ts) = unzip $ permDiff is ks
-                permutePositions graph is ks = fold2 exchgPositions graph ss ts
-                    where (ss,ts) = unzip $ permDiff is ks
-        
-        arrangeGraph noChange act graph@(pict,arcs) = do
+        arrangeButton "perm" graph@(pict,arcs) = do 
+            old <- readIORef permutationRef
+            let new = nextPerm old
+            writeIORef permutationRef new
             arrangeMode <- readIORef arrangeModeRef
-            case arrangeMode of
-                "o" -> act (movePict p0 pict,arcs)
-                _ -> do
-                    scale <- readIORef scaleRef
-                    spread <- readIORef spreadRef
-                    grade <- readIORef gradeRef
-                    let graph1 = bunchesToArcs graph
-                        graph2@(pict2,_) = scaleGraph scale graph1
-                        f x = case parse nat x of 
-                                Just i -> pict2!!i
-                                _ -> if x == "<+>" then Skip else posWidg x
-                        ws = wTreeToBunches arrangeMode spread grade
-                            $ mapT (scaleWidg scale . f) $ graphToTree graph1
-                        act' = act . scaleGraph (1/scale)
-                    if isTree arrangeMode
-                    then
-                        if noChange then act graph
-                        else do
-                            writeIORef bunchpictRef $ Just ws
-                            act' $ onlyNodes ws
-                    else do
-                        writeIORef bunchpictRef Nothing
-                        cols <- readIORef colsRef
-                        spread <- readIORef spreadRef
-                        act' $ shelf graph2 cols spread 'M'
-                                True True arrangeMode
+            setCurrGraph $ if isCTree arrangeMode 
+                           then (permuteTree old new,arcs)
+                           else permutePositions graph old new
+            scaleAndDraw "The widgets have been permuted."
+            where permuteTree is ks = fold2 exchgWidgets pict ss ts
+                                      where (ss,ts) = unzip $ permDiff is ks
+                  permutePositions gr is ks = fold2 exchgPositions gr ss ts
+                                      where (ss,ts) = unzip $ permDiff is ks
+        arrangeButton mode graph@(pict,_) = do 
+            writeIORef arrangeModeRef mode
+            let x = head mode 
+                (colsNo,angle) = (parse pnat *** parse real) $ drop 2 mode
+            when (x `elem` "amrt") $ do
+                 writeIORef colsRef $ Haskell.fromMaybe (square pict) colsNo
+                 writeIORef gradeRef $ Haskell.fromMaybe 0 angle
+            d <- spaceEnt `gtkGet` entryText
+            let dist = parse real d
+            if just dist
+               then writeIORef spreadRef $ apply2 (*(get dist)) (10,10)
+               else when (x == 'm') $ writeIORef spreadRef (0,0)
+            when (x `elem` "acmort") $ arrangeGraph True act graph
+            where act gr = do setCurrGraph gr
+                              scaleAndDraw "The widgets have been arranged."
+        
+        arrangeGraph changed act graph@(pict,arcs) = do
+            arrangeMode <- readIORef arrangeModeRef
+            if head arrangeMode == 'o' then act (movePict p0 pict,arcs)
+            else do 
+                  scale <- readIORef scaleRef
+                  spread <- readIORef spreadRef
+                  grade <- readIORef gradeRef
+                  let graph1 = bunchesToArcs graph
+                      graph2@(pict2,_) = scaleGraph scale graph1
+                      f x = case parse nat x of 
+                                 Just i -> pict2!!i
+                                 _ -> if x == "<+>" then Skip else strWidg x
+                      ws = termWToPict arrangeMode spread grade
+                                       $ mapT (scaleWidg scale . f) 
+                                       $ graphToTerm True graph1
+                      act' = act . scaleGraph (1/scale)
+                  if isTree arrangeMode
+                     then if changed then do writeIORef bunchpictRef $ Just ws
+                                             act' $ onlyNodes ws
+                                     else act graph
+                     else do writeIORef bunchpictRef Nothing
+                             cols <- readIORef colsRef
+                             spread <- readIORef spreadRef
+                             act' $ shelf graph2 cols spread 'M' True True 
+                                          arrangeMode
         
         arrangeOrCopy = do
             rect <- readIORef rectRef
@@ -513,8 +574,8 @@ painter pheight solveRef solve2Ref = do
                         vs = [pict!!n | n <- ms]
                         ws = scalePict (rscale/scale) vs
                         pict' = fold2 updList pict ms ws
-                        arcs' = foldl f arcs ns ++       -- add arcs into rect
-                           map (map g . (arcs!!)) ms-- add arcs in and from rect
+                        arcs' = foldl f arcs ns ++  -- add arcs into rect
+                          map (map g . (arcs!!)) ms -- add arcs in and from rect
                         f arcs n = updList arcs n $ is++map g (ms`meet`is)
                                  where is = arcs!!n
                         g m = case search (== m) ms of Just i -> lg+i; _ -> m
@@ -524,23 +585,23 @@ painter pheight solveRef solve2Ref = do
                     writeIORef rectRef $ Just $ translate r
                     writeIORef rectIndicesRef [lg..lg+length ms-1]
                     scaleAndDraw "The selection has been copied."
-                _ -> do
-                    arrangeMode <- readIORef arrangeModeRef
-                    spread <- readIORef spreadRef
-                    grade <- readIORef gradeRef
-                    pictures <- readIORef picturesRef
-                    edges <- readIORef edgesRef
-                    let graph@(pict,arcs)
-                            = concatGraphs spread grade arrangeMode
-                                            $ zip pictures edges
-                    writeIORef picturesRef [pict]
-                    writeIORef edgesRef [arcs]
-                    writeIORef noOfGraphsRef 1
-                    writeIORef currRef 0
-                    pictSlider `gtkSet` [widgetSensitive := False ]
-                    arrangeButton graph
+                _ -> do mode <- modeEnt `gtkGet` entryText
+                        when (notnull mode) $ do 
+                         arrangeMode <- readIORef arrangeModeRef
+                         spread <- readIORef spreadRef
+                         grade <- readIORef gradeRef
+                         pictures <- readIORef picturesRef
+                         edges <- readIORef edgesRef
+                         let graph@(pict,arcs) = concatGraphs arrangeMode spread 
+                                                      grade $ zip pictures edges
+                         writeIORef picturesRef [pict]
+                         writeIORef edgesRef [arcs]
+                         writeIORef noOfGraphsRef 1
+                         writeIORef currRef 0
+                         pictSlider `gtkSet` [widgetSensitive := False]
+                         arrangeButton mode graph
         
-        buildPaint' checking = do
+        buildPaint checking = do
           solve <- readIORef solveRef
           solver <- getSolver solve
           icon <- iconPixbuf
@@ -573,15 +634,15 @@ painter pheight solveRef solve2Ref = do
                   addContextClass btn defaultButton
                   writeIORef signalRef =<< (btn `on` buttonActivated $ act)
           if checking then do
-            f button1 "<---" $ do proofBackward solve; showPicts solve
-            f button2 "--->" $ do proofForward solve; showPicts solve
-            f button3 "stop run" $ stopRun solve
+             f button1 "<---" $ do proofBackward solve; showPicts solve
+             f button2 "--->" $ do proofForward solve; showPicts solve
+             f button3 "stop run" $ stopRun solve
           else do
-            f button1 "narrow/rewrite" $ do remote'
-                                            narrow solve; showPicts solve
-            f button2 "simplify" $ do remote'; simplify solve; showPicts solve
-            f button3 "" done
-            when checking $ writeIORef isNewCheckRef False
+             f button1 "narrow/rewrite" 
+                                  $ do remote; narrow solve; showPicts solve
+             f button2 "simplify" $ do remote; simplify solve; showPicts solve
+             f button3 "" done
+             when checking $ writeIORef isNewCheckRef False
           buildPaint1
             
         buildPaint1  = do
@@ -655,6 +716,7 @@ painter pheight solveRef solve2Ref = do
             labGreen $ combi 0
             
             -- Scroll support for canvas
+            
             containerAdd scrollCanv $ getDrawingArea canv
             changeCanvasBackground white
              
@@ -673,11 +735,10 @@ painter pheight solveRef solve2Ref = do
                 modifier <- eventModifierMouse
                 let button = Haskell.find
                       (`elem` [Button1, Button2, Button3]) modifier
-                lift $ case button of
-                        Just Button1 -> moveButton 1 p
-                        Just Button2 -> moveButton 2 p
-                        Just Button3 -> moveButton 3 p
-                        _ -> done
+                lift $ case button of Just Button1 -> moveButton 1 p
+                                      Just Button2 -> moveButton 2 p
+                                      Just Button3 -> moveButton 3 p
+                                      _ -> done
                 return False
             drawingArea `on` buttonReleaseEvent $ do
                 n <- fromEnum <$> eventButton
@@ -686,49 +747,52 @@ painter pheight solveRef solve2Ref = do
             
             lab `on` keyPressEvent $ do
                 key <- unpack <$> eventKeyName
-                lift $ case key of
-                    "p" -> mkPlanar
-                    "t" -> mkTurtle
-                    "u" -> unTurtle
-                    _ -> done
+                lift $ case key of "p" -> mkPlanar
+                                   "t" -> mkTurtle
+                                   "u" -> unTurtle
+                                   _ -> done
                 return False
             
             saveEnt `on` keyPressEvent $ do
                 key <- unpack <$> eventKeyName
-                lift $ case key of
-                    "Up" -> addOrRemove
-                    "Down" -> saveGraph
-                    _ -> done
+                lift $ case key of "Up" -> addOrRemove
+                                   "Down" -> saveGraph
+                                   _ -> done
                 return False
             
             writeIORef isNewRef False
             windowIconify win
         
-        callPaint' picts poss b n back = do
+        callPaint picts poss b n picEval hv back = do
             let graphs = map onlyNodes $ filter notnull picts
             when (notnull graphs) $ do
-                writeIORef noOfGraphsRef $ length graphs
-                write2 (picturesRef,edgesRef) $ unzip graphs
-                solve <- readIORef solveRef
-                writeIORef fontRef =<< getFont solve
-                writeIORef treeNumbersRef poss
-                writeIORef subtreesRef b
-                writeIORef bgcolorRef $ case parse color back of 
-                                        Just col -> col; _ -> white
-                noOfGraphs <- readIORef noOfGraphsRef
-                modifyIORef currRef $ \curr -> 
+                 writeIORef noOfGraphsRef $ length graphs
+                 let (pictures,edges) = unzip graphs
+                 writeIORef picturesRef pictures
+                 writeIORef edgesRef edges
+                 solve <- readIORef solveRef
+                 writeIORef fontRef =<< getFont solve
+                 writeIORef treeNumbersRef poss
+                 writeIORef subtreesRef b
+                 writeIORef bgcolorRef $ case parse color back of 
+                                              Just col -> col; _ -> white
+                 noOfGraphs <- readIORef noOfGraphsRef
+                 modifyIORef currRef $ \curr -> 
                                  if b then if curr < noOfGraphs then curr else 0
-                                      else get $ search (== n) poss++Just 0
-                isNew <- readIORef isNewRef
-                if isNew then buildPaint' False >> newPaint
-                else newPaint
-         where write2 (xRef, yRef) (x, y)
-                    = writeIORef xRef x >> writeIORef yRef y
+                                      else get $ search (== n) poss ++ Just 0
+                 writeIORef scaleRef 1
+                 writeIORef arrangeModeRef $ fst val
+                 writeIORef spreadRef $ snd val 
+                 isNew <- readIORef isNewRef
+                 if isNew then buildPaint False >> newPaint else newPaint
+         where val = case take 4 picEval of "tree" -> ("t1",fromInt2 hv) 
+                                            "over" -> ("o",(0,0))
+                                            _ -> ("m16",(0,0))
         
-        -- Haskell/Gtk only.
+        -- Haskell/Gtk only
         changeCanvasBackground c@(RGB r g b) = do
             let f n = fromIntegral $ n * 256
-                (r', g' , b') = (f r, f g, f b)
+                (r',g',b') = (f r,f g,f b)
             canv `gtkSet` [ canvasBackground := c ]
             widgetModifyBg scrollCanv StateNormal $ gtkColor r' g' b'
             
@@ -737,8 +801,7 @@ painter pheight solveRef solve2Ref = do
             mapM_ stopScan0 scans
             clear canv
             windowIconify win
-            solve <- readIORef solveRef
-            bigWin solve
+            solve <- readIORef solveRef; bigWin solve
             stopRun solve
             checkInSolver solve
         
@@ -763,64 +826,71 @@ painter pheight solveRef solve2Ref = do
                 delay <- getDelay
                 let lgs = length scans
                     (picts1,picts2) = splitAt lgs picts
-                    g sc pict = do
-                        run <- isRunning sc
-                        if run then addScan sc pict else h sc pict
+                    g sc pict = do run <- isRunning sc
+                                   if run then addScan sc pict else h sc pict
                     h sc = startScan0 sc delay
                 zipWithM_ g scans picts1
                 when (lgp > lgs) $ do
-                    scs <- Haskell.replicateM (lgp - lgs) (scanner drawWidget)
-                    zipWithM_ h scs picts2
-                    modifyIORef scansRef $ \scans -> scans++scs
+                     scs <- Haskell.replicateM (lgp - lgs) (scanner drawWidget)
+                     zipWithM_ h scs picts2
+                     modifyIORef scansRef $ \scans -> scans++scs
          where picts = if New `elem` pict then f pict [] [] else [pict]
                f (New:pict) picts pict' = f pict (picts++[pict']) []
                f (w:pict) picts pict'   = f pict picts $ pict'++[w]
-               f _ picts pict'                 = picts++[pict']
+               f _ picts pict'          = picts++[pict']
                lgp = length picts
         
+        drawText :: Point -> Color -> Int -> String -> IO () 
         drawText (p,c,i) x = do
             bgcolor <- readIORef bgcolorRef
             let col = if deleted c then bgcolor
                       else mkLight i $ case parse colPre x of 
-                                        Just (c',_) | c == black -> c'
-                                        _ -> c
+                                            Just (c',_) | c == black -> c'
+                                            _ -> c
             font <- readIORef fontRef
-            canvasText canv (round2 p)
-                textOpt{ textFill = col
-                       , textJustify = CenterAlign
-                       , textFont = Just font
-                       }
-                $ delQuotes x
+            canvasText canv (round2 p) textOpt {textFill = col,
+                                                textJustify = CenterAlign,
+                                                textFont = Just font}
+                                       $ delQuotes x
+                
+        hullCross2 :: Point -> Point -> Widget_ -> Widget_ -> [Pos,Pos]
+        hullCross2 px py v w = [round2 $ hullCross (py,px) v,
+                                round2 $ hullCross (px,py) w]
         
-        drawTree n (F (x,q,lg) cts) ct nc c p = do
-            drawText (q,nc,0) x
-            drawTrees n x q lg cts ct nc c $ succsInd p cts
-        drawTree _ (V (x,q,_)) _ nc _ _ = do
-            drawText (q,nc,0) x
-            done
+        drawTree :: TermSPI -> TermSPI -> Color -> Color -> Int -> [Int] 
+                            -> IO ()
+        drawTree (F cx@(x,px,lgx) cts) ct nc c height p = do
+            drawText px nc 0 x
+            drawTrees x px lgx cts ct nc c height $ succsInd p cts
+        drawTree _ (V cx@(x,px,_)) _ nc _ _ = do 
+            drawText px nc 0 x; done
         
-        drawTrees ::
-             Int
-             -> String
-             -> (Double, Double)
-             -> Int
-             -> [Term (String, (Double, Double), Int)]
-             -> t
-             -> Color
-             -> Color
-             -> [[Int]]
-             -> IO ()
-        drawTrees n x xy lg (ct:cts) ct0 nc c (p:ps) = do
-            line canv [q,r] $ lineOpt{lineFill = c}
-            drawTree n ct ct0 nc c p
-            drawTrees n x xy lg cts ct0 nc c ps
-            where
-                (z,pz,lgz) = root ct
-                v = Text_ (xy,0,black,0) n [x] [lg] 
-                w = Text_ (pz,0,black,0) n [z] [lgz] 
-                q = round2 $ hullCross (pz,xy) v
-                r = round2 $ hullCross (xy,pz) w
+        drawTrees :: String -> Point -> Int -> [TermSPI] -> TermSPI -> Color 
+                            -> Color -> Int -> [[Int]] -> IO ()
+        drawTrees x px lgx (ct:cts) ct0 nc c height (p:ps) = do
+            canv.line (hullCross2 px py v w) [Fill c]
+            drawTree ct ct0 nc c height p
+            drawTrees x px lgx cts ct0 nc c height ps
+            where (y,py,lgy) = root ct
+                  v = Text_ (px,0,black,0) height [x] [lgx] 
+                  w = Text_ (py,0,black,0) height [y] [lgy] 
         drawTrees _ _ _ _ _ _ _ _ _ = done
+	   		        
+        drawTreeW :: TermWP -> TermWP -> Color -> Color -> [Int] -> IO ()
+        drawTreeW (F cx@(w,pw) cts) ct nc c p = do
+            drawWidget w
+            drawTreesW w pw cts ct nc c $ succsInd p cts
+	drawTreeW (V cx@(w,pw)) _ nc _ _ = do 
+	    drawText pw nc 0 x; done
+
+        drawTreesW :: Widget_ -> Point -> [TermWP] -> TermWP -> Color -> Color 
+                              -> [[Int]] -> IO ()
+        drawTreesW v pv (ct:cts) ct0 nc c (p:ps) = do
+            canv.line (hullCross2 px py v w) [Fill c]
+            drawTreeW ct ct0 nc c p
+            drawTreesW v pv cts ct0 nc c ps
+            where (w,pw) = root ct
+        drawTreesW _ _ _ _ _ _ _ = done
         
         drawWidget (Arc ((x,y),a,c,i) t r b) = do
             bgcolor <- readIORef bgcolorRef
@@ -837,15 +907,13 @@ painter pheight solveRef solve2Ref = do
         drawWidget (Gif pos alpha file hull) = do
             let (p,_,c,_) = getState hull
             if deleted c then drawWidget hull
-            else do
-                pic <- loadPhoto pos alpha file
-                mapM_ (canvasImage canv (round2 p) imageOpt) pic
+            else do pic <- loadPhoto pos alpha file
+                    mapM_ (canvasImage canv (round2 p) imageOpt) pic
         drawWidget (Oval ((x,y),0,c,i) rx ry) = do
             bgcolor <- readIORef bgcolorRef
-            canvasOval canv (x,y) (rx,ry)
-                    $ ovalOpt{ ovalOutline = outColor c i bgcolor
-                             , ovalFill = Just $ fillColor c i bgcolor
-                             }
+            canvasOval canv (x,y) (rx,ry) $
+                       ovalOpt {ovalOutline = outColor c i bgcolor,
+                                ovalFill = Just $ fillColor c i bgcolor}
             done
         drawWidget (Path0 c i m ps) = do
             bgcolor <- readIORef bgcolorRef
@@ -857,20 +925,17 @@ painter pheight solveRef solve2Ref = do
                 optsL 2 = lineOpt{ lineFill = out, lineWidth = 2 }
                 optsL _ = lineOpt{ lineFill = out
                                  , lineWidth = 2
-                                 , lineSmooth = True
-                                 }
+                                 , lineSmooth = True }
                 optsP :: Int -> PolygonOpt
                 optsP 4 = polygonOpt{ polygonOutline = out
-                                    , polygonFill = Just fill
-                                    }
+                                    , polygonFill = Just fill }
                 optsP _ = polygonOpt{ polygonOutline = out
                                     , polygonFill = Just fill
-                                    , polygonSmooth = True
-                                    }
+                                    , polygonSmooth = True }
             if m < 4 then act (line canv) (optsL m)
                      else act (canvasPolygon canv) (optsP m)
             where act f opts = mapM_ (flip f opts . map round2) $ splitPath ps
-                         -- do flip f opts $ map round2 ps; done
+                            -- do flip f opts $ map round2 ps; done
         drawWidget (Repeat w) = drawWidget w
         drawWidget Skip = done
         drawWidget (Text_ (p,_,c,i) n strs lgs) = zipWithM_ f [0..] strs
@@ -879,14 +944,20 @@ painter pheight solveRef solve2Ref = do
         drawWidget (Tree (p@(x,y),a,c,i) n c' ct) = do
             bgcolor <- readIORef bgcolorRef
             drawTree n ct' ct' (outColor c i bgcolor) c' []
-            where ct' = mapT3 f ct; f (i,j) = rotate p a (i+x,j+y)
-        drawWidget w | isWidg w        = drawWidget $ mkWidg w
-                     | isPict w        = drawPict $ mkPict w
-        drawWidget _                   = done
+            where ct' = mapT3 f ct
+                  f (i,j) = rotate p a (i+x,j+y)
+        drawWidget (TreeW (p@(x,y),a,c,i) ct) = do
+            bgcolor <- readIORef bgcolorRef
+            drawTreeW ct' ct' (outColor c i bgcolor) c' []
+            where ct' = mapT3 f ct
+                  f (i,j) = rotate p a (i+x,j+y)
+        drawWidget w | isWidg w = drawWidget $ reduceWidg w
+                     | isPict w = drawPict $ mkPict w
+        drawWidget _            = done
         
         getDelay = truncate <$> delaySlider `gtkGet` rangeValue
 
-        getNewCheck' = readIORef isNewCheckRef
+        getNewCheck = readIORef isNewCheckRef
 
         interrupt b = 
             if b then do
@@ -898,7 +969,7 @@ painter pheight solveRef solve2Ref = do
                 delay <- getDelay
                 scans <- readIORef scansRef
                 mapM_ (`startScan` delay) scans 
-                stopBut `gtkSet` [ buttonLabel := "runnableStop" ]
+                stopBut `gtkSet` [ buttonLabel := "stop" ]
                 replaceCommandButton stopButSignalRef stopBut $ interrupt True
         
         labColor :: String -> Background -> Action
@@ -908,9 +979,9 @@ painter pheight solveRef solve2Ref = do
         
         labGreen = flip labColor greenback
         
-        labRed'   = flip labColor redpulseback
+        labRed' = flip labColor redpulseback
         
-        labSolver' = writeIORef solverMsgRef
+        labSolver = writeIORef solverMsgRef
         
         loadGraph file = do
           str <- lookupLibs file         
@@ -936,16 +1007,14 @@ painter pheight solveRef solve2Ref = do
                 let (graph,is) = reduce rect rectIndices rscale
                 writeIORef rectIndicesRef is
                 finish graph maxmeet True
-            else do
-                scale <- readIORef scaleRef
-                finish (fst $ reduce Nothing [] scale) maxmeet False
-            where
-                finish graph maxmeet b = do
-                  setCurrGraph graph
-                  scaleAndDraw $  
-                     "The " ++ (if b then "selection" else "current graph") ++
-                     " has been reduced to widgets that overlap in at most " ++
-                     show maxmeet ++ " pixels."
+            else do scale <- readIORef scaleRef
+                    finish (fst $ reduce Nothing [] scale) maxmeet False
+            where finish graph maxmeet b = do
+                    setCurrGraph graph
+                    scaleAndDraw $  
+                      "The " ++ (if b then "selection" else "current graph") ++
+                      " has been reduced to widgets that overlap in at most " ++
+                      show maxmeet ++ " pixels."
         
         mkTurtle = do
             pictures <- readIORef picturesRef
@@ -961,13 +1030,13 @@ painter pheight solveRef solve2Ref = do
                     $ mkTurt (x-b,y-h) rscale $ map (pict!!) rectIndices
             if just rect then
                 case map (pict!!) ks of
-                [Turtle{}] -> labGreen "The selection is already a turtle."
+                [Turtle {}] -> labGreen "The selection is already a turtle."
                 _ -> do
                     setCurrGraph $ removeSub (updList pict k w,arcs) rest
                     writeIORef rectIndicesRef [k]
                     scaleAndDraw "The selection has been turtled."
             else case pict of
-                [Turtle{}] -> labGreen "The picture is already a turtle."
+                [Turtle {}] -> labGreen "The picture is already a turtle."
                 _ -> do
                     scale <- readIORef scaleRef
                     setCurrGraph ([mkTurt p0 scale pict],[[]])
@@ -982,49 +1051,41 @@ painter pheight solveRef solve2Ref = do
                     q@(x1,y1) = fromInt2 (x-x0,y-y0)
                     pict = pictures!!curr
                 connect <- readIORef connectRef
-                if connect then do  -- draw (smooth) arc, 
-                    -- p <- adaptPos p  -- exchange nodes or move color
-                    scale <- readIORef scaleRef
-                    case getWidget (fromInt2 p) scale pict of
-                        widget@(Just (_,w)) -> do
-                            source <- readIORef sourceRef
-                            if nothing source
-                            then writeIORef sourceRef widget 
-                            else writeIORef targetRef widget
-                            drawPict [lightWidg w]
-                        _ -> done
-                else
-                    case n of                         
-                        1 -> do
-                            (ns,vs) <- readIORef changedWidgetsRef
-                            let translate = transXY q
-                                ws = map translate vs
-                            writeIORef changedWidgetsRef (ns,ws)
-                            rectIndices <- readIORef rectIndicesRef
-                            -- move selection
-                            when (ns `shares` rectIndices) $
-                                modifyIORef rectRef
-                                    $ Just . translate . get
-                        2 -> do
-                            rect <- readIORef rectRef
-                            when (just rect) $ do -- enlarge selection
-                                let r@(Rect (p,_,_,_) b h) = get rect
-                                    r' = Rect (add2 p q,0,black,0) (b+x1) $ h+y1
-                                writeIORef rectRef $ Just r'
-                                setFast True
-                                draw55 [delWidg r,r']
-                        _ -> do
-                            changedWidgets <- readIORef changedWidgetsRef
-                            let (ns,vs) = changedWidgets  -- rotate widgets
-                                ws = turnPict x1 vs
-                            writeIORef changedWidgetsRef (ns,ws)
-                            setFast True
-                            rect <- readIORef rectRef
-                            draw55 $ delPict vs++case rect of
-                                Just r -> r:ws
-                                _ -> ws
+                if connect    -- draw (smooth) arc, exchange nodes or move color
+                   then do scale <- readIORef scaleRef
+                           case getWidget (fromInt2 p) scale pict of
+                                widget@(Just (_,w)) 
+                                  -> do source <- readIORef sourceRef
+                                        if nothing source 
+                                           then writeIORef sourceRef widget 
+                                           else writeIORef targetRef widget
+                                        drawPict [lightWidg w]
+                                _ -> done
+                else case n of                         
+                      1 -> do (ns,vs) <- readIORef changedWidgetsRef
+                              let translate = transXY q
+                                  ws = map translate vs
+                              writeIORef changedWidgetsRef (ns,ws)
+                              rectIndices <- readIORef rectIndicesRef
+                              when (ns `shares` rectIndices) $ -- move selection
+                                   modifyIORef rectRef $ Just . translate . get
+                      2 -> do rect <- readIORef rectRef
+                              when (just rect) $ do         -- enlarge selection
+                                   let r@(Rect (p,_,_,_) b h) = get rect
+                                       r' = Rect (add2 p q,0,black,0) (b+x1) 
+                                                 $ h+y1
+                                   writeIORef rectRef $ Just r'
+                                   setFast True
+                                   draw55 [delWidg r,r']
+                      _ -> do changedWidgets <- readIORef changedWidgetsRef
+                              let (ns,vs) = changedWidgets 
+                                  ws = turnPict x1 vs        -- rotate widgets
+                              writeIORef changedWidgetsRef (ns,ws)
+                              setFast True
+                              rect <- readIORef rectRef
+                              draw55 $ delPict vs ++ case rect of Just r -> r:ws
+                                                                  _ -> ws
                 writeIORef penposRef $ Just p
-
         
         moveColor = do
             n <- truncate <$> colorSlider `gtkGet` rangeValue
@@ -1049,52 +1110,45 @@ painter pheight solveRef solve2Ref = do
                  ws = scalePict (sc+fromInt n/10*sc) us 
              writeIORef colorScaleRef (n,us)
              when (pictSize ws < 20) $ do
-                 writeIORef changedWidgetsRef (is,ws)
-                 setFast True
-                 rect <- readIORef rectRef
-                 draw55 $ delPict vs++case rect of Just r -> r:ws; _ -> ws
+                  writeIORef changedWidgetsRef (is,ws)
+                  setFast True
+                  rect <- readIORef rectRef
+                  draw55 $ delPict vs++case rect of Just r -> r:ws; _ -> ws
 
         newPaint = do
-          solve <- readIORef solveRef
-          backWin solve
-          windowDeiconify win
-          windowPresent win
-          bgcolor <- readIORef bgcolorRef
-          changeCanvasBackground bgcolor
+          solve <- readIORef solveRef; backWin solve
+          windowDeiconify win; windowPresent win
+          bgcolor <- readIORef bgcolorRef; changeCanvasBackground bgcolor
+          stopBut `gtkSet` [buttonLabel := "stop"]
           subtrees <- readIORef subtreesRef
-          stopBut `gtkSet` [buttonLabel := "runnableStop"]
           replaceCommandButton stopButSignalRef stopBut $ interrupt True
           noOfGraphs <- readIORef noOfGraphsRef
           rangeSetRange pictSlider 0 $ fromIntegral $ noOfGraphs-1
           curr <- readIORef currRef
-          pictSlider `gtkSet` [ rangeValue := fromIntegral curr ]
+          pictSlider `gtkSet` [rangeValue := fromIntegral curr]
           writeIORef rectRef Nothing
           writeIORef rectIndicesRef []
           writeIORef changedWidgetsRef nil2
           writeIORef gradeRef 0
           writeIORef colsRef 6
-          picEval <- readIORef picEvalRef
-          modeEnt  `gtkSet`
-              [entryText := if picEval == "tree" then "s" else "m16"]
+          arrangeMode <- readIORef arrangeModeRef
+          modeEnt `gtkSet` [entryText := arrangeMode]
           pictures <- readIORef picturesRef
           curr <- readIORef currRef
           edges <- readIORef edgesRef
-          arrangeMode <- readIORef arrangeModeRef
           spread <- readIORef spreadRef
           let graph@(pict,_) = (pictures!!curr,edges!!curr)
-              mode = if isTree arrangeMode then arrangeMode else "t1"
-              ws = wTreeToBunches mode spread 0 $ pictToWTree pict
-              (bunch,g) = if picEval == "tree" then (Just ws,onlyNodes ws)
-                                               else (Nothing,graph)
+              ws = termWToPict arrangeMode spread 0 $ pictToTermW pict
+              (bunch,g) = if isTree arrangeMode then (Just ws,onlyNodes ws)
+                                                else (Nothing,graph)
           writeIORef bunchpictRef bunch
-          arrangeGraph True act g
+          arrangeGraph False act g
           where act (pict,arcs) = do
-                      curr <- readIORef currRef
-                      modifyIORef picturesRef $ \pictures ->
-                          updList pictures curr pict
-                      modifyIORef edgesRef $ \edges -> updList edges curr arcs
-                      writeIORef permutationRef $ propNodes pict
-                      scaleAndDraw ""
+                     curr <- readIORef currRef
+                     modifyIORef picturesRef $ \picts -> updList picts curr pict
+                     modifyIORef edgesRef $ \edges -> updList edges curr arcs
+                     writeIORef permutationRef $ propNodes pict
+                     scaleAndDraw ""
 
         pressButton n p = do
             scans <- readIORef scansRef
@@ -1182,92 +1236,85 @@ painter pheight solveRef solve2Ref = do
              source <- readIORef sourceRef
              target <- readIORef targetRef
              if nothing source || nothing target then nada
-             else do
-                  let (s,v) = get source
-                      (t,w) = get target
-                      ts = arcs!!s
-                      is = getSupport graph s t
-                      redDots = just is
-                      connected = redDots || t `elem` ts
-                      (_,_,c,i) = getState v
-                      f (p,a,_,_) = (p,a,c,i)
-                      w' = updState f $ pict!!t
-                  case n of
-                   1 -> do
-                       arrangeMode <- readIORef arrangeModeRef
-                       if arrangeMode == "paste"
-                       then setDrawSwitch (updList pict t w',arcs)
-                                           "The target has been colored."
-                       else
-                           if connected then setDrawSwitch 
-                               (if redDots then removeSub graph
-                                   $ get is
-                               else (pict,updList arcs s $ ts `minus1` t)) 
-                               "An arc has been removed."
-                           else if s == t then nada
-                                else setDrawSwitch
-                                       (pict,updList arcs s $ t:ts)
-                                       "An arc has been drawn."
-                   2 -> do
-                       arrangeMode <- readIORef arrangeModeRef
-                       setDrawSwitch (if (isTree ||| isCenter) arrangeMode
-                                     then (exchgWidgets pict s t,arcs)
-                                     else exchgPositions graph s t)
-                                   "Source and target have been exchanged."
-                   _ -> if s == t && just is ||
-                        s /= t && connected && all (not . isRedDot) [v,w]
-                        then nada
-                        else setDrawSwitch
-                                       (addSmoothArc graph (s,t,v,w,ts))
-                                       "A smooth arc has been drawn."
-          else do
-              case n of
-                  2 -> do
-                      rect <- readIORef rectRef
-                      case rect of
-                          Just r -> do
-                              rscale <- readIORef rscaleRef
-                              writeIORef rectIndicesRef
-                                  $ getRectIndices pict rscale r
-                              rectIndices <- readIORef rectIndicesRef
-                              if null rectIndices then do
-                                  writeIORef rectRef Nothing
-                                  nada
-                              else scaleAndDraw
-                                      "A subgraph has been selected."
-                          _ -> scaleAndDraw "The selector has been removed."
-                  _ -> do
-                      rect <- readIORef rectRef
-                      scale <- readIORef scaleRef
-                      changedWidgets <- readIORef changedWidgetsRef
-                      rscale <- readIORef rscaleRef
-                      arrangeMode <- readIORef arrangeModeRef
-                      let f = if just rect then scaleWidg $ 1/rscale
-                             else transXY (-5,-5) . scaleWidg (1/scale)
-                          g = fold2 updList
-                          pair w i j = (g pict [i,j] [f w,pict!!i],
-                                  g arcs [i,j] $ map (map h . (arcs!!)) [j,i])
-                                  where h k | k == i = j
-                                            | k == j = i
-                                            | True   = k
-                          graph = case changedWidgets of 
-                              ([k],[w]) | nothing rect ->
-                                  case arrangeMode of 
-                                      "back" -> pair w 0 k
-                                      "front" -> pair w (length pict-1) k
-                                      _ -> (updList pict k $ f w,arcs)
-                              (ks,ws) -> (g pict ks $ map f ws,arcs)
-                      setCurrGraph graph
-                      scaleAndDraw "The selection has been moved or rotated."
-              writeIORef penposRef Nothing
-              writeIORef sourceRef Nothing
-              writeIORef targetRef Nothing
-              writeIORef changedWidgetsRef nil2
-              canv `gtkSet` [canvasCursor := LeftPtr]
+             else do let (s,v) = get source
+                         (t,w) = get target
+                         ts = arcs!!s
+                         is = getSupport graph s t
+                         redDots = just is
+                         connected = redDots || t `elem` ts
+                         (_,_,c,i) = getState v
+                         f (p,a,_,_) = (p,a,c,i)
+                         w' = updState f $ pict!!t
+                     case n of
+                       1 -> do arrangeMode <- readIORef arrangeModeRef
+                               if arrangeMode == "paste"
+                                  then setDrawSwitch (updList pict t w',arcs)
+                                                  "The target has been colored."
+                               else if connected then do
+                                       let gr = if redDots 
+                                                then removeSub graph $ get is
+			                        else (pict,updList arcs s $ 
+			                                          ts `minus1` t)
+                                       setDrawSwitch gr 
+                                                      "An arc has been removed."
+                                    else if s == t then nada
+                                         else setDrawSwitch
+                                                    (pict,updList arcs s $ t:ts)
+                                                    "An arc has been drawn."
+                       2 -> do arrangeMode <- readIORef arrangeModeRef
+                               let gr = if isCTree arrangeMode
+                                        then (exchgWidgets pict s t,arcs)
+                                        else exchgPositions graph s t
+                               setDrawSwitch gr
+                                        "Source and target have been exchanged."
+                       _ -> if s == t && just is || s /= t && connected && 
+                               not (isRedDot v || isRedDot w) then nada
+                            else setDrawSwitch (addSmoothArc graph (s,t,v,w,ts))
+                                               "A smooth arc has been drawn."
+          else do case n of
+                     2 -> do rect <- readIORef rectRef
+                             case rect of
+                              Just r 
+                                -> do rscale <- readIORef rscaleRef
+                                      writeIORef rectIndicesRef
+                                                  $ getRectIndices pict rscale r
+                                      rectIndices <- readIORef rectIndicesRef
+                                      if null rectIndices then 
+                                         do writeIORef rectRef Nothing; nada
+                                      else scaleAndDraw
+                                                 "A subgraph has been selected."
+                              _ -> scaleAndDraw "The selector has been removed."
+                     _ -> do rect <- readIORef rectRef
+                             scale <- readIORef scaleRef
+                             changedWidgets <- readIORef changedWidgetsRef
+                             rscale <- readIORef rscaleRef
+                             arrangeMode <- readIORef arrangeModeRef
+                             let f = if just rect then scaleWidg $ 1/rscale
+                                     else transXY (-5,-5) . scaleWidg (1/scale)
+                                 g = fold2 updList
+                                 pair w i j = (g pict [i,j] [f w,pict!!i],
+                                    g arcs [i,j] $ map (map h . (arcs!!)) [j,i])
+                                              where h k | k == i = j
+                                                        | k == j = i
+                                                        | True   = k
+                                 gr = case changedWidgets of 
+                                       ([k],[w]) | nothing rect ->
+                                        case arrangeMode of 
+                                             "back" -> pair w 0 k
+                                             "front" -> pair w (length pict-1) k
+                                             _ -> (updList pict k $ f w,arcs)
+                                       (ks,ws) -> (g pict ks $ map f ws,arcs)
+                             setCurrGraph graph
+                             scaleAndDraw 
+                                      "The selection has been moved or rotated."
+                  writeIORef penposRef Nothing
+                  writeIORef sourceRef Nothing
+                  writeIORef targetRef Nothing
+                  writeIORef changedWidgetsRef nil2
+                  canv `gtkSet` [canvasCursor := LeftPtr]
           where nada = scaleAndDraw "Nothing can be done."
-                setDrawSwitch graph str = do
-                                  setCurrGraph graph
-                                  scaleAndDraw str; switchConnect
+                setDrawSwitch graph str = do setCurrGraph graph
+                                             scaleAndDraw str; switchConnect
         
         releaseColor = do
             (n,_) <- readIORef colorScaleRef
@@ -1300,23 +1347,23 @@ painter pheight solveRef solve2Ref = do
                 g p i w = if i `elem` rectIndices
                           then transXY p $ f $ transXY (neg2 p) w else w
             when (n /= 0) $ do
-                rect <- readIORef rectRef
-                case rect of
-                     Just r@(Rect (p,_,_,_) _ _) 
-                       -> do rscale <- readIORef rscaleRef
-                             writeIORef oldRectRef rect
-                             writeIORef oldRscaleRef rscale
-                             if mode == "s" then 
-                                do writeIORef rectRef $ Just $ scaleWidg sc r
-                                   setCurrGraph (zipWith (g p) [0..] pict,arcs)
-                             else writeIORef rscaleRef sc
-                     _ | mode == "s" -> setCurrGraph (map f pict,arcs)
-                       | True        -> writeIORef scaleRef sc
-                scaleAndDraw ""
-                writeIORef changedWidgetsRef nil2
-                scaleSlider `gtkSet` [rangeValue := 0 ]
+                 rect <- readIORef rectRef
+                 case rect of
+                      Just r@(Rect (p,_,_,_) _ _) 
+                        -> do rscale <- readIORef rscaleRef
+                              writeIORef oldRectRef rect
+                              writeIORef oldRscaleRef rscale
+                              if isTree mode then 
+                                 do writeIORef rectRef $ Just $ scaleWidg sc r
+                                    setCurrGraph (zipWith (g p) [0..] pict,arcs)
+                              else writeIORef rscaleRef sc
+                      _ | isTree mode -> setCurrGraph (map f pict,arcs)
+                        | True        -> writeIORef scaleRef sc
+                 scaleAndDraw ""
+                 writeIORef changedWidgetsRef nil2
+                 scaleSlider `gtkSet` [rangeValue := 0 ]
         
-        remote' = do
+        remote = do
             subtrees <- readIORef subtreesRef
             when (not subtrees) $ do
                 treeNumbers <- readIORef treeNumbersRef
@@ -1326,7 +1373,7 @@ painter pheight solveRef solve2Ref = do
         
         remoteDraw = do
           solve <- readIORef solveRef
-          remote'
+          remote
           drawCurr solve
           showPicts solve
         
@@ -1398,7 +1445,7 @@ painter pheight solveRef solve2Ref = do
             clear canv
             sc <- scanner drawWidget
             writeIORef scansRef [sc]
-            stopBut `gtkSet` [ buttonLabel := "runnableStop" ]
+            stopBut `gtkSet` [ buttonLabel := "stop" ]
             replaceCommandButton stopButSignalRef stopBut $ interrupt True
             n <- saveEnt `gtkGet` entryText
             pictures <- readIORef picturesRef
@@ -1433,7 +1480,7 @@ painter pheight solveRef solve2Ref = do
                 pict2 = map translate pict1
                 g = scaleWidg . recip . sc
             modifyIORef picturesRef $ \pictures ->
-                updList pictures curr $ zipWith g [0..] pict2
+                                   updList pictures curr $ zipWith g [0..] pict2
             modifyIORef edgesRef $ \edges -> updList edges curr arcs
             canv `gtkSet` [ canvasSize := size]
             arrangeMode <- readIORef arrangeModeRef
@@ -1444,28 +1491,28 @@ painter pheight solveRef solve2Ref = do
                 h = filter propNode
                 ws = if just rect then h $ map (pict3!!) is else pict4
                 (hull,qs) = convexPath (map coords ws) pict4
-                drawArrow ps = line canv (map round2 ps)
-                                    $ if arrangeMode == "d1"
-                                      then lineOpt{ lineSmooth = True }
-                                      else lineOpt{ lineArrow = Just Last
-                                                  , lineSmooth = True
-                                                  }
+                drawArrow ps = line canv (map round2 ps) $
+                                    lineOpt {lineSmooth = True,
+                                             lineArrow = case arrangeMode of 
+                                                              "no" -> Nothing
+                                                              "fi" -> Just First
+                                                              "bo" -> Just Both
+                                                              _ -> Just Last}
                 k = treeNumbers!!curr
             drawMode <- readIORef drawModeRef
             if drawMode `elem` [0,15] then drawPict pict3
             else case drawMode of 
-                1 -> drawPict pict4
-                2 -> drawPict $ h $ colorLevels True pict3 arcs
-                3 -> drawPict $ h $ colorLevels False pict3 arcs
-                4 -> drawPict $ pict4++hull
-                5 -> do
-                    font <- readIORef fontRef
-                    (n,wid) <- mkSizes canv font $ map show qs
-                    let addNo x p = Text_ (p,0,dark red,0) n [x] [wid x]
-                    drawPict $ pict4++hull++zipWith (addNo . show) [0..] qs
-                _ -> drawPict $ joinPict drawMode pict4
-            when (arrangeMode /= "d2") $
-                mapM_ drawArrow $ buildAndDrawPaths (pict3,arcs)
+                 1 -> drawPict pict4
+                 2 -> drawPict $ h $ colorLevels True pict3 arcs
+                 3 -> drawPict $ h $ colorLevels False pict3 arcs
+                 4 -> drawPict $ pict4++hull
+                 5 -> do font <- readIORef fontRef
+                         (n,wid) <- mkSizes canv font $ map show qs
+                         let addNo x p = Text_ (p,0,dark red,0) n [x] [wid x]
+                         drawPict $ pict4++hull++zipWith (addNo . show) [0..] qs
+                 _ -> drawPict $ joinPict drawMode pict4
+            when (arrangeMode /= "no") $ mapM_ drawArrow 
+                                       $ buildAndTrimPaths (pict3,arcs)
             when (just rect) $ do
                 let (x1,y1,x2,y2) = pictFrame $ map (pict2!!) is
                     (b,h) = (abs (x2-x1)/2,abs (y2-y1)/2)
@@ -1483,9 +1530,9 @@ painter pheight solveRef solve2Ref = do
             solverMsg <- readIORef solverMsgRef
             labGreen $ str1 ++ add solverMsg ++ add msg
 
-        setButton' 1 opts = opts button1
-        setButton' 2 opts = opts button2
-        setButton' 3 opts = opts button3
+        setButton 1 opts = opts button1
+        setButton 2 opts = opts button2
+        setButton 3 opts = opts button3
 
         setCurrGraph (pict,arcs) = do
             pictures <- readIORef picturesRef
@@ -1498,7 +1545,7 @@ painter pheight solveRef solve2Ref = do
             when (length pict /= length pict') $
                 writeIORef permutationRef $ propNodes pict
         
-        setCurrInPaint' n = do
+        setCurrInPaint n = do
             pictures <- readIORef picturesRef
             when (n < length pictures) $ do
                 writeIORef currRef n
@@ -1516,23 +1563,13 @@ painter pheight solveRef solve2Ref = do
                     delay <- getDelay
                     mapM_ (`startScan` delay) scs
         
-        setEval' eval hv = do 
-            writeIORef picEvalRef eval
-            write2 (arrangeModeRef,spreadRef)
-                $ case take 4 eval of 
-                    "tree" -> ("t1",fromInt2 hv)
-                    "over" -> ("o",(0,0))
-                    _ -> ("m1",(0,0))
-            where write2 (ref1, ref2) (val1, val2)
-                    = writeIORef ref1 val1 >> writeIORef ref2 val2
-        
         setFast b = do 
             writeIORef fastRef b
             isNew <- readIORef isNewRef
             when (not isNew)
                $ fastBut `gtkSet` [ buttonLabel := if b then "slow" else "fast"]
         
-        setNewCheck' = writeIORef isNewCheckRef True
+        setNewCheck = writeIORef isNewCheckRef True
 
         showInSolver = do
             pictures <- readIORef picturesRef
@@ -1541,21 +1578,19 @@ painter pheight solveRef solve2Ref = do
             rect <- readIORef rectRef
             let graph = bunchesToArcs (pictures!!curr,edges!!curr)
             case rect of
-                Just _ -> do
-                    rscale <- readIORef rscaleRef
-                    rectIndices <- readIORef rectIndicesRef
-                    act $ scaleGraph rscale $ subgraph graph rectIndices
-                _ -> act graph
-            solve2 <- readIORef solve2Ref
-            bigWin solve2
+               Just _ -> do rscale <- readIORef rscaleRef
+                            rectIndices <- readIORef rectIndicesRef
+                            act $ scaleGraph rscale $ subgraph graph rectIndices
+               _ -> act graph
+            solve2 <- readIORef solve2Ref; bigWin solve2
             where act graph = do
-                    solve2 <- readIORef solve2Ref
-                    enterTree solve2 False $ graphToTree graph
+                                solve2 <- readIORef solve2Ref
+                                enterTree solve2 False $ graphToTerm False graph
         
         switchConnect = do 
-          modifyIORef connectRef not
-          connect <- readIORef connectRef
-          setBackground edgeBut $ if connect then redback else blueback
+            modifyIORef connectRef not
+            connect <- readIORef connectRef
+            setBackground edgeBut $ if connect then redback else blueback
 
         switchFast = do
             fast <- readIORef fastRef
@@ -1604,89 +1639,37 @@ painter pheight solveRef solve2Ref = do
                             scaleAndDraw "The current graph has been unturtled."
            
     return Painter
-        { buildPaint     = buildPaint'
-        , callPaint      = callPaint'
-        , getNewCheck    = getNewCheck'
-        , labSolver      = labSolver'
-        , remote         = remote'
-        , setButton      = setButton'
-        , setCurrInPaint = setCurrInPaint'
-        , setEval        = setEval'
-        , setNewCheck    = setNewCheck'
+        { buildPaint     = buildPaint
+        , callPaint      = callPaint
+        , getNewCheck    = getNewCheck
+        , labSolver      = labSolver
+        , remote         = remote
+        , setButton      = setButton
+        , setCurrInPaint = setCurrInPaint
+        , setNewCheck    = setNewCheck
         }
--- Painter types
-
-type Point  = (Double,Double)
-type Point3 = (Double,Double,Double)
-type Line_  = (Point,Point)
-type Lines  = [Line_]
-type Path   = [Point]
-type State  = (Point,Double,Color,Int) -- (center,orientation,hue,lightness)
  
-type Graph   = (Picture,Arcs)
-type Picture = [Widget_]
-type Arcs    = [[Int]]
-
--- ([w1,...,wn],[as1,...,asn]) :: Graph represents a graph with node set 
--- {w1,...,wn} and edge set {(wi,wj) | j in asi, 1 <= i,j <= n}.
-
-data Widget_ = Arc State ArcStyleType Double Double | Bunch Widget_ [Int] |
-               -- Bunch w is denotes w together with outgoing arcs to the
-               -- widgets at positions is.
-               Dot Color Point | Fast Widget_ | Gif Int Bool String Widget_ |
-               New | Oval State Double Double |
-               Path State Int Path | Path0 Color Int Int Path |
-               Poly State Int [Double] Double | Rect State Double Double |
-               Repeat Widget_ | Skip | Text_ State Int [String] [Int] |
-               Tree State Int Color (Term (String,Point,Int)) |
-               -- The center of Tree .. ct agrees with the root of ct.
-               Tria State Double | Turtle State Double TurtleActs |
-               WTree TermW deriving (Read,Show,Eq)
-
-instance Root Widget_ where undef = Skip
-
-type TurtleActs = [TurtleAct]
-data TurtleAct  = Close | Draw | 
-                  -- Close and Draw finish a polygon resp. path starting at the
-                  -- preceding Open command.
-                   Jump Double | JumpA Double | Move Double | MoveA Double | 
-                  -- JumpA and MoveA ignore the scale of the enclosing turtle.
-                  Open Color Int | Scale Double | Turn Double
-                    | Widg Bool Widget_
-                  -- The Int parameter of Open determines the mode of the path 
-                  -- ending when the next Close/Draw command is reached; 
-                  -- see drawWidget (Path0 c i m ps).
-                  -- Widg False w ignores the orientation of w, Widg True w 
-                  -- adds it to the orientation of the enclosing turtle.
-                  deriving (Read,Show,Eq)
-
-type WidgTrans = Widget_ -> Widget_
-type PictTrans = Picture -> Picture
-
-type TermW     = Term Widget_
-type TermWP    = Term (Widget_,Point)
-
-isWidg :: Widget_ -> Bool
-isWidg Dot{}          = True
-isWidg Oval{}         = True
-isWidg Path{}         = True
-isWidg (Poly _ m _ _) = m < 6            -- poly/S/W/SW/F/SF
-isWidg Rect{}         = True
-isWidg Tria{}         = True
-isWidg _              = False
-
-isPict :: Widget_ -> Bool
-isPict (Poly _ m _ _)     = m > 5        -- polyR/L/T/LT
-isPict Turtle{}           = True
-isPict _                  = False
-
-isWTree :: Widget_ -> Bool
-isWTree (WTree _) = True
-isWTree _           = False
-
+data WidgStore = WidgStore {saveWidg :: String -> Widget_ -> Action, -- not used
+                            loadWidg :: String -> Request Widget_}
+        
+widgStore :: Template WidgStore                                      
+widgStore = do
+    storeRef <- newIORef $ const Skip
+    return WidgStore
+               {saveWidg = \file w -> do store <- readIORef storeRef
+                                         writeIORef storeRef $ upd store file w,
+                loadWidg = \file -> do store <- readIORef storeRef
+                                       return $ store file}
+                                       
+-- basic PAINTER functions 
+        
 isTree :: String -> Bool
-isTree (x:_:_) = x `elem` "art"
-isTree _       = False
+isTree (x:_) = x `elem` "art"
+isTree _     = False
+
+isCTree :: String -> Bool
+isCTree (x:_) = x `elem` "acrt"
+isCTree _     = False
 
 p0 :: Point
 p0 = (0,0)
@@ -1714,23 +1697,19 @@ noRepeat :: Widget_ -> Bool
 noRepeat (Repeat _) = False
 noRepeat _          = True
 
-isFast :: Widget_ -> Bool
-isFast (Fast _) = True
-isFast _        = False
-
 wfast :: Widget_ -> TurtleAct
 wfast = widg . fast
 
-fast :: Widget_ -> Widget_
+fast :: WidgTrans
 fast (Turtle st sc acts) = Fast $ Turtle st sc $ map f acts
-                            where f (Widg b w) = Widg b $ fast w
-                                  f act        = act
+                           where f (Widg b w) = Widg b $ fast w
+                                 f act        = act
 fast (Bunch w is)        = Bunch (fast w) is
 fast (Fast w)            = fast w
 fast w                   = Fast w
 
-posWidg :: String -> Widget_
-posWidg x = Text_ st0B 0 [x] [0]
+strWidg :: String -> Widget_
+strWidg x = Text_ st0B 0 [x] [0]
 
 (<:>) :: TurtleAct -> [TurtleAct] -> [TurtleAct]
 Move 0<:>acts            = acts
@@ -1769,11 +1748,11 @@ close2 :: [TurtleAct]
 close2 = [Close,Close]
 
 textWidget :: Color -> Sizes -> String -> Widget_
-textWidget c (n,width) x = Text_ (st0 c) n strs $ map width strs
-                           where strs = map (map h) $ words $ map (g . f) x
-                                 f ' ' = '\"'; f c = c
-                                 g '\'' = ' '; g c = c
-                                 h '\"' = ' '; h c = c
+textWidget c (height,width) x = Text_ (st0 c) height strs $ map width strs
+                                where strs = map (map h) $ words $ map (g . f) x
+                                      f ' ' = '\"'; f c = c
+                                      g '\'' = ' '; g c = c
+                                      h '\"' = ' '; h c = c
 
 inRect :: (Double, Double) -> Widget_ -> Bool
 (x',y') `inRect` Rect ((x,y),_,_,_) b h = x-b <= x' && x' <= x+b &&
@@ -1784,12 +1763,12 @@ onlyNodes pict = (pict,replicate (length pict) [])
 
 pictSize :: Picture -> Int
 pictSize = sum . map f where f (Path0 _ _ _ ps) = length ps
-                             f w | isWidg w     = f $ mkWidg w
-                             f w | isPict w     = pictSize $ mkPict w
                              f (Bunch w _)      = f w
                              f (Fast w)         = f w
                              f (Repeat w)       = f w
-                             f _                 = 1
+                             f w | isWidg w     = f $ reduceWidg w
+                             f w | isPict w     = pictSize $ mkPict w
+                             f _                = 1
 
 getPoints,getAllPoints :: Widget_ -> Path
 getPoints (Path0 _ _ _ ps) = ps
@@ -1799,16 +1778,9 @@ getAllPoints (Bunch w _)      = getAllPoints w
 getAllPoints (Fast w)         = getAllPoints w
 getAllPoints (Repeat w)       = getAllPoints w
 getAllPoints (Path0 _ _ _ ps) = ps
-getAllPoints w | isWidg w     = getAllPoints $ mkWidg w
+getAllPoints w | isWidg w     = getAllPoints $ reduceWidg w
 getAllPoints w | isPict w     = concatMap getAllPoints $ mkPict w
 getAllPoints w                = concatMap getAllPoints $ hulls False w
-
-isTurtle :: Widget_ -> Bool
-isTurtle Turtle{}       = True
-isTurtle _              = False
-
-isCenter :: String -> Bool
-isCenter mode = mode == "c"
 
 removeSub,subgraph :: Graph -> [Int] -> Graph
 removeSub (pict,arcs) (i:is) = removeSub graph $ f is
@@ -1838,7 +1810,7 @@ moveTo p     = [Turn a,Move $ distance p0 p,Turn $ -a] where a = angle p0 p
 getActs :: Widget_ -> TurtleActs
 getActs Skip              = []
 getActs (Turtle _ _ acts) = acts
-getActs w                    = [widg w]
+getActs w                 = [widg w]
 
 actsToCenter :: TurtleActs -> TurtleActs
 actsToCenter acts = jumpTo (neg2 $ actsCenter acts) ++ acts
@@ -1853,13 +1825,12 @@ inCenter tr w = turtle0 (getCol w') $ jumpTo p ++ [widg w']
                       w' = tr $ shiftWidg p w
 
 addFrame :: Double -> Color -> Int -> Widget_ -> Widget_
-addFrame d c mode w = turtle0 (getCol w) $ jumpTo (neg2 p) ++
-                               [widg $ path0 c mode $ last ps:ps] ++ getActs w
-                    where (x1,y1,x2,y2) = widgFrame w
-                          p = ((x1+x2)/2,(y1+y2)/2)
-                          ps = [(x2d,y1d),(x2d,y2d),(x1d,y2d),(x1d,y1d)]
-                          x1d = x1-d; y1d = y1-d; x2d = x2+d; y2d = y2+d
-
+addFrame d c mode w = turtle0 (getCol w) $ 
+                  jumpTo (neg2 p)++[widg $ path0 c mode $ last ps:ps]++getActs w
+                  where (x1,y1,x2,y2) = widgFrame w
+                        p = ((x1+x2)/2,(y1+y2)/2)
+                        ps = [(x2d,y1d),(x2d,y2d),(x1d,y2d),(x1d,y1d)]
+                        x1d = x1-d; y1d = y1-d; x2d = x2+d; y2d = y2+d
            
 -- nodeLevels b graph!!n returns the length of a shortest path from a root of 
 -- graph to n. nodeLevels True counts in control points. nodeLevels False 
@@ -2026,7 +1997,7 @@ splitPath :: [a] -> [[a]]
 splitPath ps = if null rs then [qs] else qs:splitPath (last qs:rs)
                where (qs,rs) = splitAt 99 ps
 
-textblock :: (t, Double) -> Int -> [Int] -> (Double, Double, [(t, Double)])
+textblock :: (a,Double) -> Int -> [Int] -> (Double,Double,[(a,Double)])
 textblock (x,y) n lgs = (fromInt (maximum lgs)/2,h,map f $ indices_ lgs) 
                         where h = m*fromInt (length lgs)
                               f i = (x,y-h+m+fromInt i*k) 
@@ -2034,22 +2005,6 @@ textblock (x,y) n lgs = (fromInt (maximum lgs)/2,h,map f $ indices_ lgs)
 
 mkRects :: (Point, Double, Color, Int) -> Int -> Int -> Widget_
 mkRects st@(p,_,_,_) n lg = Rect st b h where (b,h,_) = textblock p n [lg]
-
-isRedDot :: Widget_ -> Bool
-isRedDot (Bunch w _)           = isRedDot w
-isRedDot (Dot (RGB 255 0 0) _) = True
-isRedDot _                     = False
-
-isSkip :: Widget_ -> Bool
-isSkip (Bunch w _) = isSkip w
-isSkip Skip        = True
-isSkip _           = False
-
-propNode :: Widget_ -> Bool
-propNode = not . (isRedDot ||| isSkip)
-
-propNodes :: [Widget_] -> [Int]
-propNodes pict = [i | i <- indices_ pict, propNode $ pict!!i]
 
 getState :: Widget_ -> State
 getState (Arc st _ _ _)   = st
@@ -2061,6 +2016,7 @@ getState (Poly st _ _ _)  = st
 getState (Rect st _ _)    = st
 getState (Text_ st _ _ _) = st
 getState (Tree st _ _ _)  = st
+getState (TreeW st _)     = st
 getState (Tria st _)      = st
 getState (Turtle st _ _)  = st
 getState (Bunch w _)      = getState w
@@ -2108,28 +2064,26 @@ updState f (Fast w)              = Fast $ updState f w
 updState f (Repeat w)            = Repeat $ updState f w
 updState _ w                     = w
 
--- Each widget is turned into a picture consisting of Arcs, Dots, Gifs, 
--- horizontal or vertical Ovals, Path0s, Text_s and Trees before being drawn.
+-- reduceWidg (w (p,a,c,i) ..) rotates widget w around p by a and reduces the
+-- widget to Oval or Path0.
 
--- mkWidg (w (p,a,c,i) ...) rotates widget w around p by a.
-
-mkWidg :: WidgTrans
-mkWidg (Dot c p)                   = Oval (p,0,c,0) 5 5
-mkWidg (Oval (p,a,c,i) rx ry)     = Path0 c i (filled c) $ map f [0,5..360]
-                                    where f = rotate p a . successor2 p rx ry
-mkWidg (Path (p,a,c,i) m ps)      = Path0 c i m $ map (rotate p a . add2 p) ps
-mkWidg (Poly (p,a,c,i) m rs b)    = Path0 c i m $ last ps:ps
+reduceWidg :: WidgTrans
+reduceWidg (Dot c p)               = Oval (p,0,c,0) 5 5
+reduceWidg (Oval (p,a,c,i) rx ry)  = Path0 c i (filled c) $ map f [0,5..360]
+                                     where f = rotate p a . successor2 p rx ry
+reduceWidg (Path (p,a,c,i) m ps)   = Path0 c i m $ map (rotate p a . add2 p) ps
+reduceWidg (Poly (p,a,c,i) m rs b) = Path0 c i m $ last ps:ps
                                      where ps = circlePts p a b rs
-mkWidg (Rect (p@(x,y),a,c,i) b h) = Path0 c i (filled c) $ last qs:qs
-                                    where ps = [(x+b,y-h),(x+b,y+h),
+reduceWidg (Rect (p@(x,y),a,c,i) b h) = Path0 c i (filled c) $ last qs:qs
+                                        where ps = [(x+b,y-h),(x+b,y+h),
                                                     (x-b,y+h),(x-b,y-h)]
-                                          qs = map (rotate p a) ps
-mkWidg (Tria (p@(x,y),a,c,i) r)   = Path0 c i (filled c) $ last qs:qs
-                                    where ps = [(x+lg,z),(x-lg,z),(x,y-r)]
-                                          lg = r*0.86602      -- r*3/(2*sqrt 3)
-                                                              -- = sidelength/2
-                                          z = y+lg*0.57735    -- y+lg*sqrt 3/3
-                                          qs = map (rotate p a) ps
+                                              qs = map (rotate p a) ps
+reduceWidg (Tria (p@(x,y),a,c,i) r)   = Path0 c i (filled c) $ last qs:qs where
+                                        ps = [(x+lg,z),(x-lg,z),(x,y-r)]
+                                        lg = r*0.86602         -- r*3/(2*sqrt 3)
+                                                               -- = sidelength/2
+                                        z = y+lg*0.57735       -- y+lg*sqrt 3/3
+                                        qs = map (rotate p a) ps
 
 -- used by drawWidget,hulls
 
@@ -2196,7 +2150,6 @@ mkPict (Turtle (p,a,c,i) sc acts) =
                    where p = last ps
                  g pict c m ps = if length ps < 2 then pict
                                  else pict++[Path0 c i m $ reducePath ps]
-
 mkPict w = [w]
 
 -- used by convexPath,hulls,drawWidget
@@ -2257,20 +2210,23 @@ hulls edgy = f
        f (Oval st rx ry) | rx < 6      = f $ Rect st (2*rx) ry
        f (Oval st rx ry) | ry < 6      = f $ Rect st rx (2*ry)
        f (Oval (p,0,c,i) rx ry)        = [Path0 c i (filled c) $
-                                           map (successor2 p rx ry) [0,5..360]]
-       f w@(Path0 c i m ps)            = [if edgy || even m then w
-                                          else Path0 c i m $ spline ps]
+                                            map (successor2 p rx ry) [0,5..360]]
+       f w@(Path0 c i m ps)            = [if edgy || even m 
+                                          then w else Path0 c i m $ spline ps]
        f (Text_ (p,a,c,i) n _ lgs)     = concatMap f $ zipWith g ps lgs
                                          where (_,_,ps) = textblock p n lgs
                                                g p = mkRects (p,a,c,i) n
        f (Tree (p@(x,y),a,c,i) n _ ct) = concatMap f $ foldT g $ mapT3 h ct
                          where g (_,p,lg) ss = mkRects (p,a,c,i) n lg:concat ss
                                h (i,j) = rotate p a (i+x,j+y)
-       f w | isWidg w = f $ mkWidg w
-           | isPict w = concatMap f $ mkPict w
+       f (TreeW (p@(x,y),a,c,i) ct) = concatMap f $ foldT g $ mapT3 h ct
+                         where g (_,p,lg) ss = mkRects (p,a,c,i) n lg:concat ss
+                               h (i,j) = rotate p a (i+x,j+y)
        f (Bunch w _)  = f w
        f (Fast w)     = f w
        f (Repeat w)   = f w
+       f w | isWidg w = f $ reduceWidg w
+           | isPict w = concatMap f $ mkPict w
        f _            = []
 
 -- used by dots,getFrameLns,getFramePts,joinPict,outline,splinePict,strands
@@ -2282,24 +2238,23 @@ stringsInPict = concatMap stringsInWidg
 
 stringsInWidg :: Widget_ -> [String]
 stringsInWidg (Bunch w _)        = stringsInWidg w
-stringsInWidg (Fast w)                  = stringsInWidg w
+stringsInWidg (Fast w)           = stringsInWidg w
 stringsInWidg (Repeat w)         = stringsInWidg w
 stringsInWidg (Text_ _ _ strs _) = strs
 stringsInWidg (Tree _ _ _ ct)    = stringsInTree ct
+stringsInWidg (TreeW _ __ ct)    = stringsInTreeW ct
 stringsInWidg (Turtle _ _ acts)  = stringsInActs acts
-stringsInWidg (WTree t)          = stringsInWTree t
-stringsInWidg  _                   = []
+stringsInWidg  _                 = []
 
-stringsInWTree :: TermW -> [String]
-stringsInTree :: Term (String,Point,Int) -> [String]
+stringsInTree :: TermSPI -> [String]
 stringsInTree = foldT f where f (a,_,_) strs = delQuotes a:concat strs
 
-stringsInWTree = foldT f where f w strs = stringsInWidg w++concat strs
+stringsInTreeW :: TermW -> [String]
+stringsInTreeW = foldT f where f w strs = stringsInWidg w++concat strs
 
 stringsInActs :: TurtleActs -> [String]
-stringsInActs = concatMap f
-    where f (Widg _ w) = stringsInWidg w
-          f _          = []
+stringsInActs = concatMap f where f (Widg _ w) = stringsInWidg w
+                                  f _          = []
 
 -- * GRAPHICAL INTERPRETERS
 
@@ -2308,8 +2263,6 @@ turtle0B     = turtle0 black
 turtle1 acts = case acts of Open c _:_ -> turtle0 c acts
                             Widg _ w:_ -> turtle0 (getCol w) acts
                             _ -> turtle0B acts
-
-type InterpreterT = Sizes -> Pos -> TermS -> MaybeT Cmd Picture
 
 jturtle :: TurtleActs -> Maybe Widget_
 jturtle = Just . turtle1
@@ -2443,10 +2396,13 @@ hiddenMatrix sizes spread (Hidden (EquivMat sig trips@(_:_)))
                                     g (is,js) = showTerm0 $ mkPair (h is) $ h js
                                     h = mkList . map (states sig!!)
 hiddenMatrix _ _ _ = zero                                   
+         
+-- widgetTree .. t returns [TreeW u] where u is the widget term that is 
+-- equivalent to t.
 
 widgetTree :: Sig -> Interpreter       
-widgetTree sig sizes spread t = do t <- f [] t; return [WTree t] where
-        f :: [Int] -> TermS -> MaybeT Cmd TermW
+widgetTree sig sizes spread t = do t <- f [] t; return [TreeW t] 
+  where f :: [Int] -> TermS -> MaybeT Cmd TermW
         f p (F "<+>" ts)        = do ts <- zipWithSucsM f p ts
                                      return $ F Skip ts
         f p (F "widg" ts@(_:_)) = do let u = dropnFromPoss 1 $ last ts
@@ -2456,9 +2412,18 @@ widgetTree sig sizes spread t = do t <- f [] t; return [WTree t] where
                                      return $ F w ts
         f p (F x ts)            = do ts <- zipWithSucsM f p ts
                                      return $ F (textWidget black sizes x) ts
-        f _ (V x)               = return $ V $ if isPos x then posWidg x
+        f _ (V x)               = return $ V $ if isPos x then strWidg x
                                                else textWidget black sizes x
         f _ _                   = return $ leaf $ textWidget blue sizes "hidden"
+
+-- used by Epaint > widgConst and Ecom > drawThis
+
+drawHiddenW :: Sizes -> TermW -> TermW
+drawHiddenW sizes (F x ts)   = F x $ map (drawHiddenW sizes) ts
+drawHiddenW sizes (Hidden _) = leaf $ textWidget blue sizes "hidden"
+drawHiddenW _ t              = t
+
+-- used by widgets "tree"
 
 widgets :: Sig -> Color -> Interpreter
 widgets sig c sizes spread t = f c t' where
@@ -2503,6 +2468,17 @@ widgets sig c sizes spread t = f c t' where
                                         lift $ saveWidget w u; return pict
    f _ (F "saveT" [t,u])           = do pict@[w] <- f black t
                                         lift $ saveTerm  t u; return pict
+   f _ (F "treeW" [t])             = widgetTree sig sizes spread t
+                                    {- do t <- widgetTerm sig sizes spread t
+                                        let hv = fromInt2 spread 
+                                            pict = termWToPict "t1" hv 0 t 
+                                            graph@(pict',_) = bunchesToArcs $ 
+                                                                onlyNodes pict
+                                            pss = buildAndTrimPaths graph
+                                        return $ pict'++map (path0 black 0) pss
+                         where ct = coordTreeW spread (20,20) t
+    ct' = F (v,p0) $ subterms $ transTree2 (-x,-y) ct where (v,(x,y)) = root ct
+-}
    f c (F "turt" [acts])           = do acts <- parseActs c acts
                                         return [turtle0 c acts]
    f _ (F x [t]) | just c          = f (get c) t where c = parse color x
@@ -2543,7 +2519,7 @@ widgets sig c sizes spread t = f c t' where
                       return [Widg b w]
 
 widgConst,widgConstC :: Color -> Sizes -> Pos -> TermS -> Maybe Widget_
-widgConst c sizes@(n,width) spread = f where
+widgConst c sizes@(height,width) spread = f where
    f (F x [])     | x `elem` trunks   = Just $ mkTrunk c x
    f (F x [n])    | x `elem` fractals = do n <- parsePnat n
                                            jturtle $ fractal x c n
@@ -2587,12 +2563,11 @@ widgConst c sizes@(n,width) spread = f where
    f (F "gif" [F file [],p,b,h]) = do p <- parsePnat p
                                       (b,h) <- parseReals b h
                                       Just $ Gif p True file $ Rect st0B b h
-   -- GTK feature: needs Eterm.parseBool
-   -- f (F "gif" [F file [],p,b,h,a])
-   --                               = do p <- parsePnat p
-   --                                    (b,h) <- parseReals b h
-   --                                    a <- parseBool a
-   --                                    Just $ Gif p a file $ Rect st0B b h
+   -- GTK feature: needs Eterm > parseBool
+   -- f (F "gif" [F file [],p,b,h,a]) = do p <- parsePnat p
+   --                                      (b,h) <- parseReals b h
+   --                                      a <- parseBool a
+   --                                      Just $ Gif p a file $ Rect st0B b h
    f (F x [n]) | z == "hilbP"    = do mode <- search (== mode) pathmodes
                                       n <- parsePnat n
                                       Just $ turtle0 c $ hilbert n East
@@ -2656,7 +2631,8 @@ widgConst c sizes@(n,width) spread = f where
                                                        (take k $ cycle rs) $
                                                        360/fromInt k
                                         where (z,mode) = splitAt 4 x
-   f (F "rect" [b,h])    = do (b,h) <- parseReals b h; Just $ Rect (st0 c) b h
+   f (F "rect" [b,h])    = do (b,h) <- parseReals b h
+                              Just $ Rect (st0 c) b h
    f (F "rhomb" [])      = Just $ rhombV c
    f (F "skip" [])       = Just Skip
    f (F "slice" [r,a])   = do (r,a) <- parseReals r a
@@ -2666,9 +2642,9 @@ widgConst c sizes@(n,width) spread = f where
    f (F "stick" [])      = Just $ Path (p0,0,c,-16) 4
                                        [p0,(-4,-8),(0,-150),(4,-8),p0]
    f (F "taichi" s)      = jturtle $ taichi sizes s c
-   f (F "text" ts)       = Just $ textWidget c (n,width) 
-                                $ showTree False $ drawHidden $ mkTup ts
-   f (F "tree" [t])      = Just $ Tree st0B n c $ mapT h ct where
+   f (F "text" ts)       = Just $ textWidget c sizes $ showTree False 
+                                $ drawHidden $ mkTup ts
+   f (F "tree" [t])      = Just $ Tree st0B height c $ mapT h ct where
                               ct = coordTree width spread (20,20) $ drawHidden t
                               (_,(x,y)) = root ct
                               h (a,(i,j)) = (a,fromInt2 (i-x,j-y),width a)
@@ -2786,7 +2762,7 @@ pictTrans c = f where
                                   where (z,mode) = splitAt 5 x
      f (F x []) | z == "join" = do mode <- parse pnat mode
                                    guard $ mode `elem` [6..14]
-                                   mkWidg $ joinPict mode
+                                   reduceWidg $ joinPict mode
                                 where (z,mode) = splitAt 4 x
      f (F "light" [])         = Just $ map $ shiftLight 21
      f (F x [n])  | z == "morph" = do hue:mode <- Just mode
@@ -2794,7 +2770,7 @@ pictTrans c = f where
                                       guard $ hue `elem` [0..3]
                                       mode <- search (== mode) pathmodes
                                       n <- parsePnat n
-                                      mkWidg $ morphPict mode hue n
+                                      reduceWidg $ morphPict mode hue n
                                    where (z,mode) = splitAt 5 x
      f (F "outline" [])  = Just outline
      f (F "pulse" [])    = Just $ single . turtle1 . pulse
@@ -2830,75 +2806,7 @@ pictTrans c = f where
      f (F "turn" [a])    = do a <- parseReal a; Just $ turnPict a
      f (F "unturt" [])   = Just $ fst . flip unTurt (const True)
      f _                 = Nothing
-     mkWidg tr = Just $ single . mkTurt p0 1 . tr
-
-wTreeToBunches :: String -> Point -> Double -> TermW -> Picture
-wTreeToBunches mode (hor,ver) grade t = w:ws2
-  where w:ws = bunches (if head mode == 'a' then chgY 0 ct else ct) pt
-        ct = F (v,p0) $ subterms $ transTree2 (-x,-y) ct0
-        (pt,_) = preordTerm black (const id) t0
-        (v,(x,y)) = root ct0
-        ct0 = coordWTree (hor,ver0) (20,20) t0
-        (t0,ver0) = if mode `elem` words "t2 a2 r5 r6 r7 r8"
-                    then (mapT (chgPoss $ isSkip $ root t) $ addControls t,
-                          ver/2) 
-                    else (t,ver)
-        chgPoss b (Text_ _ _ [x] _) | isPos x 
-                     = posWidg $ "pos "++unwords (map show q)
-                       where p = concatMap (\n->[n,0]) $ getPos x
-                             q = if b then context 1 p else p
-        chgPoss _ w = w
-        addControls (F w ts) = F w (map h ts)
-                               where h = if isSkip w then addControls else g
-                                     g t@(V (Text_ _ _ [x] _)) | isPos x = t
-                                     g t = F (Dot red p0) [addControls t]
-        addControls t              = t
-        bunches :: TermWP -> Term Int -> Picture
-        bunches (F (w,p) cts) (F _ pts) = Bunch (moveWidg p w) (map root pts):
-                                          concat (zipWith bunches cts pts)
-        bunches (V (Text_ _ _ [x] _,p)) _ | isPos x 
-                                         = [Bunch (Dot red p) [root t]]
-                                          where t = getSubterm pt $ getPos x
-        bunches (V (w,p)) _             = [Bunch (moveWidg p w) []]
-        chgY i (F (w,(x,_)) cts) = F (w,(x,vshift!!i)) $ map (chgY (i+1)) cts
-        chgY i (V (w,(x,_)))     = V (w,(x,vshift!!i))
-        vshift = shiftW maxminy ver0 $ map f [0..height ct-1]
-        f = (widgFrame *** ycoord) . turtle0B . map (Widg True) . row
-        row n = zipWith moveWidg ps ws
-            where (ws,ps) = unzip [label ct p | p <- allPoss ct, length p == n]
-        [h,c] = mode; n = parse pnat [c]; m = get n
-        p@(xp,_) = coords w
-        ws1 = if h == 'r' && just n && m `elem` [1..8] then map (rot m) ws 
-                                                         else ws
-        ws2 = if grade == 0 then ws1 else map rotAll ws1
-        rot 1 v = moveWidg (rotate p (grad1 z) (xp,y)) v where (z,y) = coords v
-        rot 2 v = moveTurn True (rotate p a (xp,y)) a v  where (z,y) = coords v
-                                                               a = grad1 z
-        rot 3 v = moveWidg (rotate p (grad2 v y) (xp,y)) v where y = ycoord v
-        rot 4 v = moveTurn True (rotate p a (xp,y)) a v    where y = ycoord v
-                                                                 a = grad2 v y
-        rot m v = rot (m-4) v
-        rotAll v = moveWidg (rotate p grade $ coords v) v
-                -- moveTurn True (...) grade v
-        left = op (-); right = op (+); op f w = f (xcoord w) $ midx w
-        (minw,maxw) = foldl f (w,w) ws
-              where f uv@(u, v) w | left w < left u   = (w, v)
-                                  | right w > right v = (u, w)
-                                  | True              = uv
-        minx = left minw-hor/2; maxx = right maxw+hor/2
-        grad1 z = case gauss eqs of 
-                       Just eqs | all g eqs 
-                         -> let [a,b,c] = map snd (sort (<) eqs) in a*z*z+b*z+c
-                       _ -> error "gauss"
-                  where g ([(1,_)],_) = True; g _ = False; c = (1,"c")
-                        eqs = [([(minx*minx,"a"),(minx,"b"),c],xp-180),
-                               ([(xp*xp,"a"),(xp,"b"),c],xp),
-                               ([(maxx*maxx,"a"),(maxx,"b"),c],xp+180)]
-        grad2 v y = 360*fromInt (getInd vs v)/fromInt (length vs)
-                    where vs = sort rel [w | w <- ws, y == ycoord w]
-                          rel v w = xcoord v > xcoord w
-
--- used by arrangeGraph,concatGraphs,newPaint
+     reduceWidg tr = Just $ single . mkTurt p0 1 . tr
 
 shiftW :: Num a => ((t, t) -> (a, a)) -> a -> [(t, a)] -> [a]
 shiftW maxmin d (x:xs) = fst $ foldl f ([0],x) xs
@@ -2914,12 +2822,15 @@ midx,midy :: Widget_ -> Double
 midx w = (x'-x)/2 where (x,_,x',_) = widgFrame w
 midy w = (y'-y)/2 where (_,y,_,y') = widgFrame w
 
--- | coordWTree (hor,ver) p t adds coordinates to the nodes of t such that p is 
+type TermWP = Term (Widget_,Point)
+
+-- coordTreeW (hor,ver) p t adds coordinates to the nodes of t such that p is 
 -- the leftmost-uppermost corner of the smallest rectangle enclosing t.
 -- hor is the horizontal space between adjacent subtrees. ver is the vertical 
 -- space between adjacent tree levels.
-coordWTree :: Point -> Point -> Term Widget_ -> TermWP
-coordWTree (hor,ver) p = alignWLeaves hor . f p
+
+coordTreeW :: Point -> Point -> TermW -> TermWP
+coordTreeW (hor,ver) p = alignWLeaves hor . f p
   where f (x,y) (V w)    = V (w,(x+midx w,y))
         f (x,y) (F w []) = F (w,(x+midx w,y)) []
         f (x,y) (F w ts) = if bdiff <= 0 then ct' else transTree1 (bdiff/2) ct'
@@ -2927,18 +2838,21 @@ coordWTree (hor,ver) p = alignWLeaves hor . f p
                            hdiff = height w+maximum (map (height . root) ts)
                            height w = y'-y where (_,y,_,y') = widgFrame w
                            ct:cts = map (f (x,y+hdiff/2+ver)) ts
-                           cts' = transWTrees hor ct cts
+                           cts' = transTreesW hor ct cts
                            ct' = F (w,((g (head cts')+g (last cts'))/2,y)) cts'
                            g = fst . snd . root
                            h (w,(x,_)) = maximum . ((x+midx w):)
+                           
+-- used by termWToPict and widgets "tree"	
 
--- transWTrees hor ct cts orders the trees of ct:cts with a horizontal space of 
--- hor units between adjacent trees. transWTrees takes into account different
+-- transTreesW hor ct cts orders the trees of ct:cts with a horizontal space of 
+-- hor units between adjacent trees. transTreesW takes into account different
 -- heights of adjacent trees by shifting them to the left or to the right such 
 -- that nodes on low levels of a tree may occur below a neighbour with fewer 
 -- levels.
-transWTrees :: Double -> TermWP -> [TermWP] -> [TermWP]
-transWTrees hor ct = f [ct]
+
+transTreesW :: Double -> TermWP -> [TermWP] -> [TermWP]
+transTreesW hor ct = f [ct]
       where f us (t:ts) = if d < 0 then f (map (transTree1 $ -d) us++[t]) ts
                           else f (us++[transTree1 d t]) $ map (transTree1 d) ts
                        -- f (us++[if d < 0 then t else transTree1 d t]) ts
@@ -2972,18 +2886,102 @@ isWLeaf _        = False
 transWLeaves :: Double -> [TermWP] -> TermWP -> [TermWP]
 transWLeaves hor ts t = loop hor
               where loop hor = if x1+w1+hor >= x2-w2 then us else loop $ hor+1 
-                         where us = transWTrees hor (head ts) $ tail ts
+                         where us = transTreesW hor (head ts) $ tail ts
                                [x1,x2] = map (fst . snd . root) [last us,t]
                                [w1,w2] = map (midx . fst . root) [last us,t]
+     
+addControls :: TermW -> TermW
+addControls (F Skip ts) = F Skip $ map addControls ts
+addControls (F w ts)    = F w $ map (F (Dot red p0) . single . addControls) ts
+addControls t           = t
 
-graphToTree :: Graph -> TermS
-graphToTree graph = relToGraph pairs [] $ domainPT pairs [] where
-         f i = (show i,[show $ last path | k:path <- buildPaths graph, k == i])
-         pairs = map f $ propNodes $ fst graph
+chgPoss :: Bool -> Widget_ -> Widget_ 
+chgPoss b (Text_ _ _ [x] _) | isPos x = strWidg $ "pos " ++ unwords (map show q)
+                                      where p = concatMap (\n->[n,0]) $ getPos x
+                                            q = if b then context 1 p else p
+chgPoss _ w = w
+ 
+-- bunches splits a widget term with widget positions into bunches
+
+bunches :: TermI -> TermI -> TermWP -> Picture
+bunches pt (F _ pts) (F (w,p) cts) = Bunch (moveWidg p w) (map root pts):
+                                     concat (zipWith (bunches pt) pts cts)
+bunches pt _ (V (Text_ _ _ [x] _,p)) 
+                         | isPos x = [Bunch (Dot red p) 
+                                     [root $ getSubterm pt $ getPos x]]
+bunches _ _ (V (w,p))              = [Bunch (moveWidg p w) []]
+
+-- used by termWToPict
+
+termWToPict,termWToPict0 :: String -> Point -> Double -> TermW -> Picture
+
+termWToPict mode spread@(hor,ver) grade t =
+              if take 2 mode `elem` words "t2 a2 r5 r6 r7 r8" 
+              then termWToPict0 mode (hor,ver/2) grade $
+                                mapT (chgPoss $ isSkip $ root t) $ addControls t
+              else termWToPict0 mode spread grade t         
+
+termWToPict0 mode spread@(hor,ver) grade t = w:ws2 where
+    ct = coordTreeW spread (20,20) t
+    ct' = F (v,p0) $ subterms $ transTree2 (-x,-y) ct where (v,(x,y)) = root ct
+    (pt,_) = preordTerm black (const id) t
+    x:param = mode
+    w:ws = bunches pt pt $ if x == 'a' then chgY 0 ct' else ct'
+    
+    chgY :: Int -> TermWP -> TermWP
+    chgY i (F (w,(x,_)) cts) = F (w,(x,vshift!!i)) $ map (chgY $ i+1) cts
+    chgY i (V (w,(x,_)))     = V (w,(x,vshift!!i))
+    vshift = shiftW maxminy ver $ map f [0..height ct-1]
+             where f = (widgFrame *** ycoord) . turtle0B . map (Widg True) . row
+    row n = zipWith moveWidg ps ws
+            where (ws,ps) = unzip [label ct p | p <- allPoss ct, length p == n]
+    rot 1 v = moveWidg (rotate p (grad1 z) (xp,y)) v where (z,y) = coords v
+    rot 2 v = moveTurn True (rotate p a (xp,y)) a v  where (z,y) = coords v
+                                                           a = grad1 z
+    rot 3 v = moveWidg (rotate p (grad2 v y) (xp,y)) v where y = ycoord v
+    rot 4 v = moveTurn True (rotate p a (xp,y)) a v    where y = ycoord v
+                                                             a = grad2 v y
+    rot m v = rot (m-4) v
+    n = parse pnat param
+    m = get n
+    ws1 = if x == 'r' && just n && m `elem` [1..8] then map (rot m) ws else ws
+    
+    p@(xp,_) = coords w
+    rotAll v = moveWidg (rotate p grade $ coords v) v
+            -- moveTurn True (...) grade v
+    left = op (-); right = op (+); op f w = f (xcoord w) $ midx w
+    (minw,maxw) = foldl f (w,w) ws where f (u,v) w | left w < left u   = (w,v)
+                                                   | right w > right v = (u,w)
+                                                   | True              = (u,v)
+    minx = left minw-hor/2; maxx = right maxw+hor/2
+    eqs = [([(minx*minx,"a"),(minx,"b"),c],xp-180),
+           ([(xp*xp,"a"),(xp,"b"),c],xp),
+           ([(maxx*maxx,"a"),(maxx,"b"),c],xp+180)] where c = (1,"c")
+    correct ([(1,_)],_) = True
+    correct _           = False
+    poly z = a*z*z+b*z+c where [a,b,c] = map snd $ sort (<) eqs
+    grad1 z = case gauss eqs of Just eqs | all correct eqs -> poly z
+                                _ -> error "gauss"
+    rel v w = xcoord v > xcoord w
+    grad2 v y = 360*fromInt (getInd vs v)/fromInt (length vs)
+                where vs = sort rel [w | w <- ws, y == ycoord w]
+    ws2 = if grade == 0 then ws1 else map rotAll ws1
+
+-- used by arrangeGraph,concatGraphs,newPaint
+
+-- graphToTerm b graph transforms graph into a term t. t is constructed from the
+-- set of equations (b = True) or the binary relation that represents graph.
+
+graphToTerm :: Bool -> Graph -> TermS
+graphToTerm b graph = if b then collapse True $ eqsToGraph (indices_ eqs) eqs
+                           else relToGraph pairs [] $ domainPT pairs [] 
+    where (eqs,_) = relToEqs 0 pairs []
+          pairs = map f $ propNodes $ fst graph
+          f i = (show i,[show $ last path | k:path <- buildPaths graph, k == i])
 
 -- used by arrangeGraph,showInSolver
 
--- * __Morphing__, __scaling__ and __framing__
+-- MORPHING, SCALING and FRAMING
 
 morphPict :: Int -> Int -> Int -> PictTrans
 morphPict mode m n ws = concat $ zipWith f (init ws) $ tail ws
@@ -3072,7 +3070,7 @@ turtleFrame (p,a,_,_) sc acts = minmax $ fst $ foldl f ([p],[(p,a,sc)]) acts
 
 -- used by actsCenter,widgFrame
 
--- * __Picture__ operators
+-- PICTURE operators
 
 movePict :: Point -> PictTrans
 movePict = map . moveWidg
@@ -3080,7 +3078,8 @@ movePict = map . moveWidg
 moveWidg :: Point -> WidgTrans
 moveWidg p = updState f where f (_,a,c,i) = (p,a,c,i)
 
--- | transXY (x,y) w moves w x units to the right and y units to the bottom.
+-- transXY (x,y) w moves w x units to the right and y units to the bottom.
+
 transXY :: Point -> WidgTrans
 transXY (0,0) w = w
 transXY (a,b) w = moveWidg (x+a,y+b) w where (x,y) = coords w
@@ -3146,7 +3145,7 @@ flipPict hor = map f
               f (Bunch w is) = Bunch (f w) is       
               f (Fast w)     = Fast $ f w      
               f (Repeat w)   = Repeat $ f w
-              f w             = w
+              f w            = w
               g (Turn a)   = Turn $ -a
               g (Widg b w) = Widg b $ f w
               g act        = act
@@ -3278,8 +3277,9 @@ mkSnow withCenter huemode d m n k w =
             r = maximum $ map (distance $ gravity w) ps
             a = 360/fromInt k
             pict = if isTurtle w then mkPict w else [w]
-            mkWidg [w]  = w
-            mkWidg pict = shiftWidg (gravity w') w' where w' = mkTurt p0 1 pict
+            reduceWidg [w]  = w
+            reduceWidg pict = shiftWidg (gravity w') w' 
+                              where w' = mkTurt p0 1 pict
             g :: Int -> Double -> Path -> Picture
             g 0 _ _  = []
             g i r ps = zipWith3 h qs angs flips ++ g (i-1) r' qs
@@ -3290,7 +3290,7 @@ mkSnow withCenter huemode d m n k w =
                     pict' = zipWith updCol (map (f . getCol) pict) pict
                     f col = hue huemode col n $ n-i
                     h p a b = moveWidg p $ turnWidg a $ scaleWidg (b/3^(n-i)) 
-                                                      $ mkWidg pict'
+                                                      $ reduceWidg pict'
             angs | m < 5  = zeros 
                  | m == 5 = iter++angs
                  | True   = 0:iter++concatMap f [1..n-2]
@@ -3411,19 +3411,21 @@ plait mode c n d m = oscillate acts $ m
 -- table pict d n displays pict as a matrix with n columns and a horizontal and
 -- vertical distance of d units between the ANCHORS of adjacent widgets. 
 -- table returns an action sequence.
+
 table :: Int -> Double -> [Widget_] -> Widget_
 table n d = turtle0B . concatMap g . f
             where f [] = []; f s  = take n s:f (drop n s)
                   g pict = open:concatMap h pict++[Close,down,Jump d,up]
                            where h w = [widg w,Jump d]
 
--- | shelf graph cols (dh,dv) align scaled ... mode displays graph as a matrix 
--- with cols columns and a horizontal/vertical spacing of dh/dv units between 
--- the borders of adjacent widgets. shelf returns a picture (scaled = True) or 
--- an action sequence (scaled = False). If mode = "m2", the widget anchors are 
--- aligned vertically and the columns according to the value of align (L/M/R). 
--- Otherwise the widget anchors are aligned horizontally and the rows according 
--- to align.
+-- shelf graph cols (dh,dv) align scaled .. mode displays graph as a matrix with
+-- cols columns and a horizontal/vertical spacing of dh/dv units between the
+-- borders of adjacent widgets. shelf returns a picture (scaled = True) or an
+-- action sequence (scaled = False).
+-- If take 2 mode = "m2", the widget anchors are aligned vertically and the 
+-- columns according to the value of align (L/M/R). Otherwise the widget anchors
+-- are aligned horizontally and the rows according to align.
+
 shelf :: Graph -> Int -> Point -> Char -> Bool -> Bool -> String -> Graph
 shelf graph@([],_) _ _ _ _ _ _ = graph
 shelf graph@(pict,_) cols (dh,dv) align centered scaled mode = 
@@ -3434,7 +3436,7 @@ shelf graph@(pict,_) cols (dh,dv) align centered scaled mode =
  where lg = length pict
        is = [0..lg-1]
        rows = lg `div` cols
-       upb | isCenter mode      = maximum levels
+       upb | mode == "c"        = maximum levels
            | lg `mod` cols == 0 = rows - 1
            | True               = rows
        rowIndices = [0..upb]
@@ -3450,7 +3452,7 @@ shelf graph@(pict,_) cols (dh,dv) align centered scaled mode =
               else [turtle0B $ if centered then actsToCenter acts else acts],
               arcs)
         where ws = sortR (pict1 True) $ concatMap levelRow rowIndices
-              rowList pict = if isCenter mode then f 0 [] else g pict []
+              rowList pict = if mode == "c" then f 0 [] else g pict []
                          where f i picts = if null r then picts
                                            else f (i+1) $ picts++[r]
                                            where r = [pict!!k | k <- levelRow i]
@@ -3500,28 +3502,32 @@ getSupport graph s t = do (_,_:path@(_:_:_)) <- searchGet f $ buildPaths graph
 
 -- used by releaseButton
 
-pictToWTree :: Picture -> TermW
-pictToWTree pict = case map f pict of [t] -> t
+-- pictToTermW [w1,..,wn] returns F(Skip)[t1,..,tn] where ti is the widget term
+-- that is equivalent to wi.
+
+pictToTermW :: Picture -> TermW
+pictToTermW pict = case map f pict of [t] -> t
                                       ts -> F Skip $ zipWith g [0..] ts
-                where f (WTree t) = t
-                      f w         = F w []
-                      g i (F w ts) = F w (map (g i) ts)
-                      g i (V (Text_ _ _ [x] _)) | take 4 x == "pos " 
-                                   = V $ posWidg $ "pos "++unwords (map show p)
-                                     where p = i:getPos x
-                      g _ t        = t
+                   where f :: Widget_ -> TermW
+	                 f (TreeW t) = t
+                         f w         = F w []
+                         g :: Int -> TermW -> TermW
+		         g i (F w ts) = F w (map (g i) ts)
+                         g i (V (Text_ _ _ [x] _)) | take 4 x == "pos " 
+                               = V $ strWidg $ "pos " ++
+                                               unwords (map show $ i:getPos x)
+                         g _ t = t
 
 -- used by newPaint,concatGraphs
 
-concatGraphs :: Point -> Double -> String -> [Graph] -> Graph 
+concatGraphs :: String -> Point -> Double -> [Graph] -> Graph 
 concatGraphs _ _ _ []                 = nil2
 concatGraphs _ _ _ [graph]            = graph
-concatGraphs spread grade mode graphs = (concat pictures,foldl g [] edges)
- where (pictures,edges) = unzip $ map (bunchesToArcs . f) graphs
-       f graph@(pict,_) = if any isWTree pict then onlyNodes ws else graph
-                    where ws = wTreeToBunches m spread grade $ pictToWTree pict
-       g arcs = (arcs++) . map (map (+ length arcs))
-       m = if isTree mode then mode else "t1"
+concatGraphs mode spread grade graphs = (concat pictures,foldl g [] edges)
+       where (pictures,edges) = unzip $ map (bunchesToArcs . f) graphs
+             f graph@(pict,_) = if any isTreeW pict then onlyNodes ws else graph
+                     where ws = termWToPict mode spread grade $ pictToTermW pict
+             g arcs = (arcs++) . map (map (+ length arcs))
 
 -- used by addOrRemove,arrangeOrCopy
 
@@ -3530,26 +3536,25 @@ concatGraphs spread grade mode graphs = (concat pictures,foldl g [] edges)
 
 bunchesToArcs :: Graph -> Graph
 bunchesToArcs graph@(pict,_) = (pict2,foldl removeCycles arcs1 cycles)
-  where addArcs (pict,arcs) (m,Bunch w is) = (updList pict m w,
+   where addArcs (pict,arcs) (m,Bunch w is) = (updList pict m w,
                                                updList arcs m $ arcs!!m`join`is)
-        addArcs graph (m,Fast w)   = addArcs graph (m,w)
-        addArcs graph (m,Repeat w) = addArcs graph (m,w)
-        addArcs graph _            = graph
-        bunches = zip [0..] $ map getBunch pict
-        getBunch (Fast w)   = w
-        getBunch (Repeat w) = w
-        getBunch w          = w
-        cycles = [(s,t,v,w,ts) | b@(s,Bunch v ts) <- bunches,
-                                 (t,Bunch w [n]) <- bunches`minus1`b,
-                                 t `elem` ts, n == s, isRedDot w]
-        cycles' = map f cycles where f (s,t,v,w,_) = (t,s,w,v,[s])
-        graph1@(pict1,_) = foldl addSmoothArc graph $ cycles++cycles'
-        (pict2,arcs1) = foldl addArcs graph1 $ zip [0..] pict1
-        removeCycles arcs (s,t,_,_,_) = map f $ indices_ arcs
-                                        where f n | n == s = arcs!!n`minus1`t
-                                                  | n == t = arcs!!n`minus1`s
-                                                  | True   = arcs!!n
-
+         addArcs graph (m,Fast w)   = addArcs graph (m,w)
+         addArcs graph (m,Repeat w) = addArcs graph (m,w)
+         addArcs graph _            = graph
+         bunches = zip [0..] $ map getBunch pict
+         getBunch (Fast w)   = w
+         getBunch (Repeat w) = w
+         getBunch w          = w
+         cycles = [(s,t,v,w,ts) | b@(s,Bunch v ts) <- bunches,
+                                  (t,Bunch w [n]) <- bunches`minus1`b,
+                                  t `elem` ts, n == s, isRedDot w]
+         cycles' = map f cycles where f (s,t,v,w,_) = (t,s,w,v,[s])
+         graph1@(pict1,_) = foldl addSmoothArc graph $ cycles++cycles'
+         (pict2,arcs1) = foldl addArcs graph1 $ zip [0..] pict1
+         removeCycles arcs (s,t,_,_,_) = map f $ indices_ arcs
+                                         where f n | n == s = arcs!!n`minus1`t
+                                                   | n == t = arcs!!n`minus1`s
+                                                   | True   = arcs!!n
 
 -- used by arrangeGraph,concatGraphs,scaleAndDraw,showInSolver
 
@@ -3581,19 +3586,19 @@ arcsToBunches (Bunch w is:pict,ks:arcs)
 arcsToBunches (w:pict,is:arcs) = Bunch w is:arcsToBunches (pict,arcs)
 arcsToBunches _                = []
 
--- buildAndDrawPaths graph transforms the arcs of graph into paths that do not
+-- buildAndTrimPaths graph transforms the arcs of graph into paths that do not
 -- cross the borders of the widgets of pict. 
 
-buildAndDrawPaths :: Graph -> [Path]
-buildAndDrawPaths graph@(pict,_) = map f $ buildPaths graph
-                     where f (n:ns) = p':ps++[q']
-                                   where v = pict!!n
-                                         w = pict!!last ns
-                                         p = coords v
-                                         ps = map (coords . (pict!!)) $ init ns
-                                         q = coords w
-                                         p' = hullCross (head $ ps++[q],p) v
-                                         q' = hullCross (last $ p:ps,q) w
+buildAndTrimPaths :: Graph -> [Path]
+buildAndTrimPaths graph@(pict,_) = map f $ buildPaths graph
+                   where f (n:ns) = p':ps++[q']
+                                    where v = pict!!n
+                                          w = pict!!last ns
+                                          ps = map (coords . (pict!!)) $ init ns
+                                          p = coords v
+                                          q = coords w
+                                          p' = hullCross (head $ ps++[q],p) v
+                                          q' = hullCross (last $ p:ps,q) w
 
 -- used by scaleAndDraw
 
@@ -3655,7 +3660,7 @@ buildPaths (pict,arcs) = connect $ concatMap f $ indices_ pict where
                                f2 path = last path == hpath && headdot
                                connectC path i = connect2 path $ context i paths
 
--- used by buildAndDrawPaths,exchgPositions,graphToTree,releaseButton,subgraph
+-- used by buildAndTrimPaths,exchgPositions,graphToTerm,releaseButton
 
 -- CROSSINGS and PICTURE EXTENSIONS
 
@@ -3664,25 +3669,26 @@ buildPaths (pict,arcs) = connect $ concatMap f $ indices_ pict where
 
 hullCross :: Line_ -> Widget_ -> Point
 hullCross line@(p1@(x1,y1),p2@(x2,y2)) w = 
-     case w of Arc{}         -> head hull
-               Gif _ _ _ w   -> hullCross line w
-               Oval (_,0,_,_) rx ry  -> if p1 == p2 then p2 
-                                        else (x2+rx*cos rad,y2+ry*sin rad) 
-                                        where rad = atan2' (y1-y2) (x1-x2)
-               Path _ _ ps   -> head $ f $ mkLines ps
-               Text_{}       -> mindist p1 hull
-               Tree{}        -> mindist p1 hull
-               _ | isWidg w  -> head hull
-                 | isPict w  -> mindist p1 hull
-               Bunch w _     -> hullCross line w
-               Fast w        -> hullCross line w
-               Repeat w      -> hullCross line w
-               _             -> p2
+           case w of Arc {}        -> head hull
+                     Gif _ _ _ w   -> hullCross line w
+                     Oval (_,0,_,_) rx ry  -> if p1 == p2 then p2 
+                                              else (x2+rx*cos rad,y2+ry*sin rad) 
+                                              where rad = atan2' (y1-y2) (x1-x2)
+                     Path _ _ ps   -> head $ f $ mkLines ps
+                     Text_ {}      -> mindist p1 hull
+                     Tree {}       -> mindist p1 hull
+                     TreeW {}      -> mindist p1 hull
+                     Bunch w _     -> hullCross line w
+                     Fast w        -> hullCross line w
+                     Repeat w      -> hullCross line w
+                     _ | isWidg w  -> head hull
+                       | isPict w  -> mindist p1 hull
+                     _             -> p2
      where hull = f $ concat $ getFrameLns w
            f ls = if null ps then [p2] else map get ps
                 where ps = filter just $ map (crossing (line,p2)) $ addSuc ls
 
--- used by buildAndDrawPaths,convexPath,drawTrees
+-- used by buildAndTrimPaths,convexPath,drawTrees
 
 -- crossing line1 line2 returns the crossing point of line1 with line2.
 
@@ -3904,7 +3910,7 @@ blackText sizes = widg . textWidget black sizes
 -- * alignments
 
 drawAlignment :: Sizes -> Align_ String -> [TurtleAct]
-drawAlignment sizes@(n,width) t = 
+drawAlignment sizes@(height,width) t = 
                   case t of Compl x y t -> f x t y red
                             Equal_ [x] t -> f x t x green
                             Equal_ (x:s) t -> f x (Equal_ s t) x green
@@ -3924,7 +3930,7 @@ drawAlignment sizes@(n,width) t =
        h x t = 
            jumpDown ht++move t wa++Close:JumpA bt:blackText sizes x:jump t bt++
            drawAlignment sizes t where wa = fromInt $ width x; bt = wa/2
-       ht = fromInt n/2
+       ht = fromInt height/2
 
 jump :: Eq a => Align_ a -> Double -> [TurtleAct]
 jump t bt = if t == End [] then [] else [JumpA bt,Move 30]
@@ -4288,18 +4294,18 @@ pileR h is = actsToCenter $ open:up:f h (reverse is)++[Close]
                    frame = rectC black 10 10
                    quad i = rectC (hue 0 green h i) 10 10
 
--- * matrices
+-- matrices
 
 drawMatrix :: Sizes -> (String -> String -> TurtleActs) -> [String]
                     -> [String] -> (String -> Double) -> (String -> Double)
                     -> TurtleActs
-drawMatrix sizes@(n,width) entry dom1 dom2 btf htf =
+drawMatrix sizes@(height,width) entry dom1 dom2 btf htf =
              actsToCenter $ down:open:up:rectC black bt ht:JumpA bt:
                             drawRow lineHead ht++Close:JumpA ht:concatMap h dom
              where lineHead a = [widg $ textWidget blue sizes a]
                    dom = [i | i <- dom1, any notnull $ map (entry i) dom2]
                    bt = halfmax width dom+3
-                   ht = fromInt n/2+3
+                   ht = fromInt height/2+3
                    h i = JumpA ht:open:up:rectC black bt ht:lineHead i++
                          JumpA bt:drawRow (entry i) ht++[Close,JumpA ht]
                          where ht = htf i
@@ -4310,13 +4316,13 @@ drawMatrix sizes@(n,width) entry dom1 dom2 btf htf =
 lookupT i j ts = case lookupL i j ts of Just t -> t; _ -> V ""
 
 boolMatrix :: Sizes -> [String] -> [String] -> [(String,String)] -> TurtleActs
-boolMatrix sizes@(n,width) dom1 dom2 ps =
+boolMatrix sizes@(height,width) dom1 dom2 ps =
                      drawMatrix sizes entry dom1 dom2 btf $ const ht
                      where entry i j = if (i,j) `elem` ps
                                        then [widg $ Oval (st0 red) m m] else []
                            m = minimum (ht:map btf dom2)-1
                            btf j = halfmax width [j]+3
-                           ht = fromInt n/2+3
+                           ht = fromInt height/2+3
 
 listMatrix :: Sizes -> Pos -> [String] -> [String] -> TriplesS -> TurtleActs
 listMatrix sizes spread dom1 dom2 trips = 
@@ -4325,12 +4331,12 @@ listMatrix sizes spread dom1 dom2 trips =
                                 g c d = c++'\'':d
 
 termMatrix :: Sizes -> [(String,String,TermS)] -> TurtleActs
-termMatrix sizes@(n,width) trips = drawMatrix sizes entry dom1 dom2 btf htf
+termMatrix sizes@(height,width) trips = drawMatrix sizes entry dom1 dom2 btf htf
                  where (dom1,dom2) = sortDoms $ map (pr1 *** pr2) trips
                        entry i j = [act str] where (act,str) = f i j
                        f i j = colTerm $ lookupT i j trips
                        btf j = halfmax width (j:map (snd . flip f j) dom1)+3
-                       htf _ = fromInt n/2+3
+                       htf _ = fromInt height/2+3
                        colTerm t = (widg . textWidget col sizes,
                                     delBrackets $ showTerm0 t)
                                    where col = case parse colPre $ root t of
@@ -4415,11 +4421,12 @@ widgString = concat [do symbol "Arc"; state <- state; t <- arcType
                         h <- enclosed real; return $ Rect state b h,
                      symbol "Repeat" >> enclosed widgString >>= return . Repeat,
                      symbol "Skip" >> return Skip,
-                     do symbol "Text_"; state <- state; n <- enclosed nat
+                     do symbol "Text_"; state <- state; height <- enclosed nat
                         strs <- list $ token quoted
-                        list int >>= return . Text_ state n strs,
-                     do symbol "Tree"; state <- state; n <- enclosed nat
-                        c <- token hexcolor; ctree >>= return . Tree state n c,
+                        list int >>= return . Text_ state height strs,
+                     do symbol "Tree"; state <- state; height <- enclosed nat
+                        c <- token hexcolor
+                        ctree >>= return . Tree state height c,
                      do symbol "Tria"; state <- state; r <- enclosed real
                         return $ Tria state r,
                      do symbol "Turtle"; state <- state; sc <- enclosed real

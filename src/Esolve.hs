@@ -960,14 +960,15 @@ filterTerms _ _ _        = Just []
 
 applyDrawFun :: Sig -> TermS -> TermS -> TermS
 applyDrawFun sig drawFun t = if drawFun == leaf "id" then t
-                             else wtree $ simplifyIter sig 
-                                        $ F "$" [drawFun,add1ToPoss t] 
-     where parser = parse $ singleTerm sig
-           wtree (F "$" [F "$" [F "wtree" [m],f],t]) | just m' = g t pt
+                             else mapW $ simplifyIter sig 
+                                       $ F "$" [drawFun,add1ToPoss t] 
+     where mapW :: TermS -> TermS
+           mapW (F "$" [F "$" [F "mapW" [m],f],t]) | just m' = g t pt
               where m' = parsePnat m
                     order = case get m' of 1 -> levelTerm; 2 -> preordTerm
                                            3 -> heapTerm;  _ -> hillTerm
                     (pt,n) = order black (const id) t
+                    g :: TermS -> TermI -> TermS
                     g (F x ts) (F k us) | just u  = F "widg" $ vs++[h (get u) k]
                                         | True    = F x vs
                                                     where vs = zipWith g ts us
@@ -976,20 +977,22 @@ applyDrawFun sig drawFun t = if drawFun == leaf "id" then t
                                         | True    = F "widg" [h t k]
                     g t _ = t
                     h t k = sapplyL sig f [t,mkConst k,mkConst n]
-           wtree (F "$" [F "wtree" [f],t]) = g t
-              where g (F x ts) | just u  = F "widg" $ vs++[h $ get u]
+           mapW (F "$" [F "mapW" [f],t]) = g t
+              where g :: TermS -> TermS
+                    g (F x ts) | just u  = F "widg" $ vs++[h $ get u]
                                | True    = F x vs where vs = map g ts
                                                         u = parser x
                     g t@(V x)  | isPos x = mkPos $ tail $ getPos x
                                | True    = F "widg" [h t]
                     g t = t
                     h = sapply sig f
-           wtree t = t
+           mapW t = t
+           parser = parse $ termsum sig
 
--- wtree(f)(t) replaces each subgraph x(t1,..,tn) of t by the subgraph 
+-- mapW(f)(t) replaces each subgraph x(t1,..,tn) of t by the subgraph 
 -- widg(t1,...,tn,f(x)).
 
--- wtree(m)(f)(t) replaces each subtree x(t1,...,tn) of t by the subtree 
+-- mapW(m)(f)(t) replaces each subtree x(t1,...,tn) of t by the subtree 
 -- widg(t1,...,tn,f(x,k,max)) where k is the position of x within t with respect
 -- to level order (m=1), prefix order (m=2), heap order (m=3) or hill order 
 -- (m>3) and max is the maximum of positions of t.
@@ -1615,7 +1618,7 @@ simplifyA sig (F "`NOTsubset`" [F x ts,F y us])
 
 simplifyA sig t = simplifyS sig t
 
-wmat matrix = F "widg" [F "mat" [Hidden matrix]]
+mat matrix = F "mat" [Hidden matrix]
 
 simplifyS sig (F "`meet`" [F x ts,F y us])
   | collectors x y = do guard $ all f ts && all f us; jList $ meetTerm ts us
@@ -1646,6 +1649,8 @@ simplifyS sig (F "$" [F "$" [F "sfold" [f],a],F x (t:ts)]) | collector x =
                         Just $ apply (apply (F "sfold" [f])
                                             $ simplifyIter sig $ applyL f [a,t])
                                      $ F x ts
+
+simplifyS sig (F "string" [t])    = Just $ leaf $ showTerm0 $ simplifyIter sig t
 
 simplifyS sig (F "term" [F x []]) = parse (term sig) x   -- inverse of "string"
 
@@ -1701,7 +1706,7 @@ simplifyS sig (F "evalRG" [rel])  = Just $ relToGraphAll pairs []
                                     where pairs = evalRelPairs sig f f rel
                                           f = showTerm0 . (states sig!!)
 
-simplifyS sig (F "evalRM" [rel])  = Just $ wmat $ BoolMat dom1 dom2 pairs
+simplifyS sig (F "evalRM" [rel])  = Just $ mat $ BoolMat dom1 dom2 pairs
                                     where (dom1,dom2) = sortDoms pairs
                                           pairs = map f $ evalRel sig rel
                                           f (i,j) = (g i,g j)
@@ -1711,7 +1716,7 @@ simplifyS sig (F "evalRM" [rel])  = Just $ wmat $ BoolMat dom1 dom2 pairs
 simplifyS sig (F "evalT" [tab]) = jList $ map f $ evalTab sig tab
                                   where f (t,u,v) = mkTrip t u v
 
-simplifyS sig (F "evalM" [tab]) = Just $ wmat $ TermMat trips 
+simplifyS sig (F "evalM" [tab]) = Just $ mat $ TermMat trips 
                                   where trips = map f $ evalTab sig tab
                                         f (t,u,v) = (showTerm0 t,showTerm0 u,v)
 
@@ -1730,7 +1735,7 @@ simplifyS sig (F "~" [st,st']) = do i <- searchS sig st; j <- searchS sig st'
 simplifyS sig (F x@"minAuto" []) = Just $ Hidden $ EquivMat sig $ bisim0 sig
 
 simplifyS sig (Hidden (EquivMat _ trips)) | trips /= new
-                                 = Just $ wmat $ EquivMat sig new
+                                 = Just $ mat $ EquivMat sig new
                                    where new = bisimStep trips
 
 -- (state,label)-paths from st to st' without internal cycles
@@ -1920,8 +1925,6 @@ simplifyT (F "CASE" (F "->" [t,_]:ts)) | isFalse t = Just $ F "CASE" ts
 simplifyT (F "size" [F "{}" ts]) = jConst $ length $ mkSet ts
 
 simplifyT (F "height" [t])       = jConst $ height t
-
-simplifyT (F "string" [t])       = Just $ leaf $ showTerm0 t
 
 simplifyT (F "getCols" [F x ts]) = Just $ if null z then F x $ map f ts
                                           else F col [F (tail z) $ map f ts]

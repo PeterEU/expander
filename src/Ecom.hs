@@ -1,5 +1,5 @@
 {-
-Module      : Ecom (update from July 20, 2021)
+Module      : Ecom (update from September 6, 2021)
 Copyright   : (c) Peter Padawitz and Jos Kusiek, 2021
 License     : BSD3
 Stability   : experimental
@@ -170,7 +170,7 @@ linearTerm = concat [do symbol "F"; x <- token quoted
 -- SOLVER messages
 
 start :: String
-start = "Welcome to Expander3 (July 20, 2021)"
+start = "Welcome to Expander3 (September 6, 2021)"
 
 startOther :: String -> String
 startOther solve = "Load and parse a term or formula in " ++ solve ++ "!"
@@ -583,29 +583,26 @@ wrongArity :: Show a => String -> a -> String
 wrongArity f lg = "The number in the entry field is too big. " ++ f ++
                   " has only " ++ show lg ++ " arguments."
 
-enumerators :: [String]
+enumerators,interpreters,specfiles1,specfiles2,specfiles3 :: [String]
+
 enumerators  = words "alignment palindrome dissection" ++ ["level partition",
                      "preord partition","heap partition","hill partition"]
 
-interpreters :: [String]
-interpreters = words "tree widgets overlay matrices" ++ "matrix solution":
-               ["linear equations","level partition","preord partition",
-                "heap partition","hill partition","dissection"]
+interpreters = words "tree widgets matrices" ++ ["matrix solution",
+                     "linear equations","level partition","preord partition",
+                     "heap partition","hill partition","dissection"]
 
-specfiles1 :: [String]
 specfiles1 =
   words "abp account align auto1 auto2 base bool bottle bottleac bottlef" ++
   words "btree cobintree coin coregs cse cycle dna echo echoac election" ++
   words "factflow flowers FP gauss graphs hanoi hanoilab hinze infbintree" ++
   words "kino knight kripke1 kripke2"
 
-specfiles2 :: [String]
 specfiles2 =
   words "lazy lift liftlab list listeval listrev log log4 lr1 lr2 micro" ++
   words "modal mutex mutexco mutexquad nat NATths needcoind newman obdd" ++ 
   words "obst partn penroseS phil philac polygons prims prog puzzle queens"
 
-specfiles3 :: [String]
 specfiles3 =
   words "regeqs relalg relalgdb relalgp robot ROBOTacts sendmore set" ++
   words "shelves simpl stack STACKimpl STACKimpl2 stream trans0 trans1" ++
@@ -884,10 +881,6 @@ solver this solveRef enum paint = do
           setCmdGtk simplBut simplify'
           setCmdGtk splitBut splitTree
           setCmdGtk fastBut switchFast
-
-          picEval <- readIORef picEvalRef
-          spread <- readIORef spreadRef
-          setEval paint picEval spread
           setPicDir True
           buildSolve1
         
@@ -1167,7 +1160,7 @@ solver this solveRef enum paint = do
 
 -- The other methods of solver are listed in alphabetical order:
 
-        -- | Used by 'addClauses' and 'addSpec''.
+        -- | Used by 'addClauses' and 'addSpec'.
         addAxioms :: TermS -> String -> Action
         addAxioms t file = do
           sig <- getSignature
@@ -1239,18 +1232,18 @@ solver this solveRef enum paint = do
             str <- lookupLibs file
             parseSigMap file $ removeComment 0 str
 
-        -- | Called by menu items /from text field/ and /from file/ from menu
+        -- Called by menu items /from text field/ and /from file/ from menu
         -- /signature/.
         addSigMapT :: Action
         addSigMapT = do
             str <- getTextHere
             parseSigMap tfield str
 
-        -- | Adds a specification from file. Used by 'addSpecWithBase',
+        -- Adds a specification from file. Used by 'addSpecWithBase',
         -- 'parseSig'. Exported by public 'Epaint.Solver' method
         -- 'Epaint.addSpec'.
-        addSpec' :: Bool -> FilePath -> Action
-        addSpec' b file = do
+        addSpec :: Bool -> FilePath -> Action
+        addSpec b file = do
           checking <- readIORef checkingRef
           when (not checking) $ do
               when b $ modifyIORef specfilesRef $ \specfiles -> file:specfiles
@@ -1294,7 +1287,7 @@ solver this solveRef enum paint = do
                                       labGreen' $ newSig file'
                                       delay act1
                                 specfiles <- readIORef specfilesRef
-                                mapM_ (addSpec' False) $ specs `minus` specfiles
+                                mapM_ (addSpec False) $ specs `minus` specfiles
                                 delay finish
                             Partial (_,ps,cps,cs,ds,fs,hs) rest
                               -> do
@@ -1308,16 +1301,16 @@ solver this solveRef enum paint = do
                                           else (file,lookupLibs file)
                onlySpace = all (`elem` " \t\n")
         
-        -- | Adds base specification first, then loads specification from
-        -- given file by calling 'addSpec''. Used by multiple entries from
+        -- Adds base specification first, then loads specification from
+        -- given file by calling 'addSpec'. Used by multiple entries from
         -- the "specification" menu. Pressing "Reteurn" in entry field is
         -- equal to menu item "specification"->"add"->"from file (Return)".
         addSpecWithBase :: FilePath -> Action
         addSpecWithBase spec = do
-          addSpec' True "base"
-          unless (spec == "base") $ addSpec' True spec
+          addSpec True "base"
+          unless (spec == "base") $ addSpec True spec
         
-        -- | Adds substitutions. Called by menu item
+        -- Adds substitutions. Called by menu item
         -- /add from text field/ from menu /substitution/.
         addSubst :: Action
         addSubst = do
@@ -1357,7 +1350,7 @@ solver this solveRef enum paint = do
                        | True           = take 85 l:split ('.':drop 85 l)
                text = unlines $ addNo 0 $ concatMap split ls
 
-        -- | Add theorems from file. Used by 'addClauses', 'addSpec''
+        -- | Add theorems from file. Used by 'addClauses', 'addSpec'
         -- and /from SolverN/ menu items created by 'createClsMenu'.
         
         addTheorems :: TermS -> FilePath -> Action
@@ -1505,8 +1498,9 @@ solver this solveRef enum paint = do
                 sig <- getSignature
                 sig' <- getSignatureR solve
                 case applySignatureMap sig sig' (fst signatureMap) $ trees!!curr
-                    of Just t -> do bigWin solve; enterTree solve formula t
-                       _ -> labRed' $ sigMapError other
+                     of Just t -> do bigWin solve
+                                     enterTree solve formula t
+                        _ -> labRed' $ sigMapError other
         
         -- | Called by menu item /apply/ from menu /substitution/.
         applySubst :: Action
@@ -1533,10 +1527,10 @@ solver this solveRef enum paint = do
         applySubstTo x = do
             trees <- readIORef treesRef
             substitution <- readIORef substitutionRef
-
             if null trees then labBlue' start
                           else applySubstTo' x $ fst substitution x
--- used by setSubst'
+                          
+        -- used by setSubst'
        
         applySubstTo' :: String -> TermS -> Action
         applySubstTo' x v = do
@@ -1564,7 +1558,7 @@ solver this solveRef enum paint = do
                                    where t' = replace t p $ u>>>for v x
                                          u = getSubterm t p
                                          ps = map (p++) $ freeXPositions sig u x
--- used by applySubstTo
+        -- used by applySubstTo
 
         applyTheorem :: Bool -> Maybe Int -> TermS -> Action
         applyTheorem saveRedex k th = do
@@ -1613,7 +1607,7 @@ solver this solveRef enum paint = do
                             else labRed' $ noTheorem k
                     else labRed' $ noAppT k
                     
--- used by specialize,applyClause
+        -- used by specialize,applyClause
  
         applyTransitivity :: Action
         applyTransitivity = do
@@ -1702,29 +1696,21 @@ solver this solveRef enum paint = do
         
         -- | Minimize solver window. Exported by public 'Epaint.Solver' method
         -- 'Epaint.backWin'.
-        backWin' :: Action
-        backWin' = windowIconify  win
+        backWin :: Action
+        backWin = windowIconify win
         
         -- | Bring solver window to front, even if minimized. Exported by public
         -- 'Epaint.Solver' method 'Epaint.bigWin'.
         bigWin' :: Action
-        bigWin' = windowDeiconify  win >> windowPresent  win
+        bigWin' = windowDeiconify win >> windowPresent win
         
         -- | Used by slider horBut.
         blowHor :: Int -> Action
-        blowHor i = do
-            modifyIORef spreadRef $ \spread -> (i,snd spread)
-            picEval <- readIORef picEvalRef
-            spread <- readIORef spreadRef
-            setEval paint picEval spread
+        blowHor i = modifyIORef spreadRef $ \spread -> (i,snd spread)
         
         -- | Used by slider verBut.
         blowVer :: Int -> Action
-        blowVer i = do
-            modifyIORef spreadRef $ \spread -> (fst spread,i)
-            picEval <- readIORef picEvalRef
-            spread <- readIORef spreadRef
-            setEval paint picEval spread
+        blowVer i = modifyIORef spreadRef $ \spread -> (fst spread,i)
 
         buildKripke :: Int -> Action
         buildKripke 3 = do                            -- from current graph
@@ -2694,10 +2680,10 @@ solver this solveRef enum paint = do
         drawNode (a,p) c =
           if isPos a then done
           else do font <- readIORef fontRef
-                  canvasText canv p textOpt{textFont = Just font,
-                                            textFill = c',
-                                            textJustify = CenterAlign} $
-                                    delQuotes a
+                  canvasText canv p textOpt {textFont = Just font,
+                                             textFill = c',
+                                             textJustify = CenterAlign}
+                                    $ delQuotes a
                   done
          where c' = case parse colPre a of Just (c,_) -> c; _ -> c
        
@@ -2811,16 +2797,15 @@ solver this solveRef enum paint = do
                           
         -- used by draw and drawTree3
         
-        {- |
-            @drawTree3 ct .. rs@ applies @drawTree2 ct ..@ to the subtrees of
-            @ct@ at positions @rs@. Used by 'drawSubtrees'.
-        -}
+-- drawTree3 ct .. rs applies drawTree2 ct .. to the subtrees of ct at positions
+-- and is used by drawSubtrees.
+
         drawTree3 :: TermSP -- type of ct'
                   -> TermSP -- type of ct
-                  -> Color -- type of nc
-                  -> Color -- type of ac
-                  -> Color -- type of nc'
-                  -> Color -- type of ac'
+                  -> Color  -- type of nc
+                  -> Color  -- type of ac
+                  -> Color  -- type of nc'
+                  -> Color  -- type of ac'
                   -> [Int]
                   -> [[Int]] -- type of qs
                   -> [[Int]] -- type of rs
@@ -3176,7 +3161,7 @@ solver this solveRef enum paint = do
         getSolver' = return this
         
         -- | Returns content of text area. Used by 'addClauses',
-        -- 'addSigMapT', 'addSpec'', 'addSubst', 'applyClause', 'checkProofT',
+        -- 'addSigMapT', 'addSpec', 'addSubst', 'applyClause', 'checkProofT',
         -- 'generalize', 'parseText', 'replaceText' and 'specialize'. Exported
         -- by public 'Epaint.Solver' method 'Epaint.getText'.
         getTextHere :: Request String
@@ -3212,12 +3197,7 @@ solver this solveRef enum paint = do
                 hideBut `gtkSet`
                     [ buttonLabel := if showState then "hide" else "show" ]
         
-        -- | Minimize solver window. Exported by public 'Epaint.Solver' method
-        -- 'Epaint.iconify'.
-        iconify' :: Action
-        iconify' = windowIconify win
-        
-        -- | Handles incorrect parser results. Used by 'addClauses', 'addSpec'',
+        -- | Handles incorrect parser results. Used by 'addClauses', 'addSpec',
         -- 'addSubst', 'applyClause', 'generalize', 'instantiate',
         -- 'parseConjects', 'parseText', 'parseTerms', 'replaceText'' and
         -- 'specialize'.
@@ -3481,11 +3461,9 @@ solver this solveRef enum paint = do
         loadText b file = do
           str <- lookupLibs file
           if null str then labRed' $ file ++ " is not a file name."
-                      else if b then do enterText' str
-                                        labGreen' $ loaded file
-                                else do solve <- readIORef solveRef
-                                        bigWin solve
-                                        enterText solve str
+          else if b then do enterText' str; labGreen' $ loaded file
+                    else do solve <- readIORef solveRef;bigWin solve
+                            enterText solve str
         
         -- | Used by 'applyInd', 'applyTheorem', 'enterTree'', 'narrowLoop',
         -- 'narrowPar', 'replaceSubtrees'', 'replaceVar', 'simplify''' and
@@ -3657,8 +3635,7 @@ solver this solveRef enum paint = do
                setProof True False msg [p] quantifierMoved
                clearAndDraw
 
-
-        {- |
+       {- |
             Moves a subtree of a tree on the canvas. Click and hold the left
             mouse button over a subtree. Move the subtree to its new
             destination. When the mouse button is released the subtree will be
@@ -3753,10 +3730,9 @@ solver this solveRef enum paint = do
             constraints <- readIORef constraintsRef
             axioms <- readIORef axiomsRef
             treeposs <- readIORef treepossRef
-
             sig <- getSignature
             writeIORef ruleStringRef
-                $ if formula then "NARROWING" else "REWRITING"
+                       $ if formula then "NARROWING" else "REWRITING"
             modifyIORef counterRef $ \counter -> upd counter 'd' 0
             let t = trees!!curr
                 cls = filter (not . isSimpl) axioms
@@ -3769,7 +3745,7 @@ solver this solveRef enum paint = do
                     extendPT $ Narrow 0 False
                     narrowOrRewritePar t sig (Just $ -1) cls False treeposs
 
--- used by narrow'
+        -- used by narrow'
         
         narrowLoop :: Sig -> [TermS] -> Int -> Int -> Action
         narrowLoop sig cls k limit
@@ -3866,7 +3842,7 @@ solver this solveRef enum paint = do
                     searchRedex $ ks `minus` solPositions
                     where lg = length ts; is = indices_ ts
 
--- used by narrow''
+        -- used by narrow''
 
         narrowOrRewritePar :: TermS -> Sig -> Maybe Int -> [TermS] -> Bool
                            -> [[Int]] -> Action
@@ -3878,7 +3854,7 @@ solver this solveRef enum paint = do
             if formula || ps `subset` boolPositions sig t then f narrowPar
                                                           else f rewritePar
                                                           
--- used by applyTheorem,narrow'
+        -- used by applyTheorem,narrow'
 
         narrowPar :: TermS
                   -> Sig
@@ -4030,7 +4006,7 @@ solver this solveRef enum paint = do
                 stop = labColorToPaint magback str'
             narrowStep sig cls limit u proceed stop nar
             
--- used by narrow''
+        -- used by narrow''
 
         -- | Called by menu item /negate for symbols/ from /axioms/ menu or
         -- by pressing @n@ on left label ('lab').
@@ -4075,7 +4051,7 @@ solver this solveRef enum paint = do
                     extendPT $ NegateAxioms ps1 cps1
                     setProof True False str [] msg
                     
--- used by negateAxioms
+        -- used by negateAxioms
         
         -- | Shows error message "@str@ cannot be stretched." on left label.
         -- Used by 'applyClause', 'applyCoinduction', 'applyInduction',
@@ -4083,7 +4059,7 @@ solver this solveRef enum paint = do
         notStretchable :: String -> Action
         notStretchable str = labRed' $ str ++ " cannot be stretched."
         
-        -- | Used by 'addClauses' and 'addSpec''.
+        -- | Used by 'addClauses' and 'addSpec'.
         parseConjects :: Sig -> FilePath -> String -> Action
         parseConjects sig file conjs =
             case parseE (implication sig) conjs of
@@ -4135,7 +4111,7 @@ solver this solveRef enum paint = do
                             Correct cl -> enterTree' False cl
                             p -> incorrect p str $ illformed "term or formula"
         
-        -- | Used by 'addSpec''.
+        -- | Used by 'addSpec'.
         parseTerms :: Sig -> FilePath -> String -> Action
         parseTerms sig file ts =  case parseE (term sig) ts of
             Correct t -> do
@@ -4702,7 +4678,7 @@ solver this solveRef enum paint = do
                             clearAndDraw
                         _ -> labMag "Enter equations between variables."
         
--- used by renameVar
+        -- used by renameVar
         
         -- | Called by menu item /label roots with entry/ from menu /graph/ or
         -- by pressing @l@ with left label ('lab') active.
@@ -4731,7 +4707,7 @@ solver this solveRef enum paint = do
             extendPT $ ReplaceNodes x
             drawCurr'
             
--- used by replaceNodes
+        -- used by replaceNodes
         
         -- called from menu item
         -- /replace by tree of Solver@N@/ from menu /transform selection/.
@@ -4795,7 +4771,7 @@ solver this solveRef enum paint = do
             setTreesFrame []
             setProof True True "REPLACING THE SUBTREES" ps replacedTerm
             
--- used by replaceSubtrees
+        -- used by replaceSubtrees
         
         -- | Called by menu item /insert\/replace by text/ from menu
         -- /transform selection/ or by pressing @i@ while left lable ('lab') is
@@ -4828,7 +4804,7 @@ solver this solveRef enum paint = do
                                    clearAndDraw
                         Bad str -> labMag str
                         
--- used by replaceText
+        -- used by replaceText
         
         replaceVar :: String -> TermS -> [Int] -> Action
         replaceVar x u p = do
@@ -4854,7 +4830,7 @@ solver this solveRef enum paint = do
                         setTreesFrame []
                         setProof True True msg [p]
                                          $ subMsg str x
--- used by replaceQuant
+        -- used by replaceQuant
         
         -- | Used by 'releaseSubtree' and 'releaseTree'.
         resetCatch :: Action
@@ -5009,13 +4985,14 @@ solver this solveRef enum paint = do
             saveGraphDH b screen picDir pp n
             modifyIORef picNoRef succ
         
-        -- | Used by 'draw' and 'saveGraphN'.
         saveGraphDH :: Bool -> Canvas -> FilePath -> FilePath -> Int -> Action
         saveGraphDH b screen dir dirPath n = do
           mkHtml screen dir dirPath n
           let pic = if b then "tree" else "graph in the painter"
           lab2 `gtkSet` [labelText := saved pic $ mkFile dirPath n]
-        
+
+        -- used by 'draw' and 'saveGraphN'
+       
         -- | Called by menu item /save proof to file/ from tree menu or by
         -- pressing key @s@ while left label ('lab') is active.
         saveProof :: Action
@@ -5210,8 +5187,6 @@ solver this solveRef enum paint = do
         setInterpreter' eval = do
           writeIORef picEvalRef eval
           interpreterLabel `gtkSet` [ labelLabel := eval ]
-          spread <- readIORef spreadRef
-          setEval paint eval spread
           str <- ent `gtkGet` entryText
           sig <- getSignature
           let drawFun = case parse (term sig) str of 
@@ -5538,7 +5513,7 @@ solver this solveRef enum paint = do
                     clearAndDraw
                 _ -> labRed' $ noApp "Shift subformulas"
                 
--- used by shiftSubs
+        -- used by shiftSubs
         
         -- | Used by 'removeClauses'. Called by menu items /show/ and
         -- /[show].. in text field of SolverN/ from menu /axioms/.
@@ -5546,14 +5521,10 @@ solver this solveRef enum paint = do
         showAxioms b = do
             axioms <- readIORef axiomsRef
             if null axioms then labGreen' "There are no axioms."
-            else
-                if b then do
-                    enterFormulas' axioms
-                    labGreen' $ see "axioms"
-                else do
-                    solve <- readIORef solveRef
-                    bigWin solve
-                    enterFormulas solve axioms
+            else if b then do enterFormulas' axioms
+                              labGreen' $ see "axioms"
+                else do solve <- readIORef solveRef; bigWin solve
+                        enterFormulas solve axioms
         
         -- | Called by menu item /[show].. for symbols/ from menu /axioms/ or by
         -- pressing button @x@ while left label ('lab') is active.
@@ -5691,10 +5662,10 @@ solver this solveRef enum paint = do
                            font <- readIORef fontRef
                            sizes <- mkSizes canv font $ stringsInPict $ get pict
                            spread <- readIORef spreadRef
-                           setEval paint "tree" spread
                            pict <- runT $ mkPict sizes
                            curr <- readIORef currRef
-                           callPaint paint [get pict] [curr] False curr "white"
+                           callPaint paint [get pict] [curr] False curr "tree" 
+                                     spread "white"
                    finish t = do
                        trees <- readIORef treesRef
                        if null trees then enterTree' False t
@@ -5735,16 +5706,16 @@ solver this solveRef enum paint = do
                let mkMat b  = case parseEqs t of        -- matrix from equations
                                    Just eqs -> f b $ eqsToGraphAll eqs
                                    _ -> f b t           -- matrix from graph
-                   f True t = wmat $ BoolMat dom1 dom2 pairs where
+                   f True t = mat $ BoolMat dom1 dom2 pairs where
                               (dom1,dom2) = sortDoms pairs
                               pairs = deAssoc $ graphToRel labs t
-                   f _ t    = wmat $ ListMat dom1 dom2 trips where
+                   f _ t    = mat $ ListMat dom1 dom2 trips where
                               (dom1,dom2) = sortDoms $ map (pr1 *** pr2) trips
                               trips = graphLToRel labs t
-                   mkBM s s' tr = wmat $ BoolMat (g fst) (g snd) pairs
+                   mkBM s s' tr = mat $ BoolMat (g fst) (g snd) pairs
                                   where pairs = deAssoc $ mkPairs s s' tr
                                         g pr = mkSet $ map pr pairs
-                   mkLM s s' tr = wmat $ ListMat s' labs' trips
+                   mkLM s s' tr = mat $ ListMat s' labs' trips
                                   where trips = mkTrips s labs s' tr
                                         labs' = mkSet [x | (_,x,_:_) <- trips]
                    u = case mode of 0 -> mkMat True
@@ -5759,12 +5730,8 @@ solver this solveRef enum paint = do
                                     _ -> mkLM sts ats $ outL sig
                modifyIORef treesRef $ \ts -> updList ts curr $ replace1 t p u
                clearAndDraw
-               {- writeIORef picEvalRef "matrices"
-               interpreterLabel `gtkSet` [ labelLabel := "matrices" ]
-               spread <- readIORef spreadRef
-               setEval paint "matrices" spread-}
         
-        -- | Called by all /(...) numbers/ menu items from /nodes/ menu.
+        -- called by all /(...) numbers/ menu items from /nodes/ menu
         
         showNumbers :: Int -> Action
         showNumbers m = do
@@ -5783,13 +5750,14 @@ solver this solveRef enum paint = do
                 drawThis "" (replace1 t p v) []
          where label (RGB 0 0 0) n = show n
                label c n           = show c++'$':show n
-               order = case m of 1 -> levelTerm -- "level numbers"
+               order = case m of 1 -> levelTerm  -- "level numbers"
                                  2 -> preordTerm -- "preorder positions"
-                                 3 -> heapTerm -- "heap positions"
-                                 _ -> hillTerm -- "hill positions"
+                                 3 -> heapTerm   -- "heap positions"
+                                 _ -> hillTerm   -- "hill positions"
         
-        -- | Called by button /paint/ ('paintBut'). Exported by public
-        -- 'Epaint.Solver' method 'Epaint.showPicts'.
+        -- called by button /paint/ ('paintBut'). Exported by public
+        -- 'Epaint.Solver' method 'Epaint.showPicts'
+        
         showPicts' :: Action
         showPicts' = do
           trees <- readIORef treesRef
@@ -5856,8 +5824,7 @@ solver this solveRef enum paint = do
                 solPositions <- readIORef solPositionsRef
                 let str = '\n':showDeriv proof trees solPositions
                 if b then do enterText' str; labGreen' $ see "proof"
-                     else do solve <- readIORef solveRef
-                             bigWin solve
+                     else do solve <- readIORef solveRef; bigWin solve
                              enterText solve str
         
         -- called by both /show proof term/ menu items from tree menu.
@@ -5944,15 +5911,13 @@ solver this solveRef enum paint = do
           if null dom then labGreen' emptySubst
           else do case mode of 0 -> do enterFormulas' ts
                                        labGreen' $ see "substitution"
-                               1 -> do solve <- readIORef solveRef
-                                       bigWin solve
+                               1 -> do solve <- readIORef solveRef; bigWin solve
                                        enterFormulas solve ts
-                               _ -> do solve <- readIORef solveRef
-                                       bigWin solve
+                               _ -> do solve <- readIORef solveRef; bigWin solve
                                        setNewTrees solve ts typ
 
 -- showSubtreePicts prepares selected subtrees of the current tree for being 
--- displayed in the painter window.
+-- displayed in the painter window and is used by showPicts'.
 
         showSubtreePicts :: Action
         showSubtreePicts = do
@@ -5972,10 +5937,11 @@ solver this solveRef enum paint = do
           sizes <- mkSizes canv font $ concatMap (stringsInPict . getPict) picts
           setTime
           picts <- mapM runT $ mkPicts sizes
+          picEval <- readIORef picEvalRef
+          spread <- readIORef spreadRef
           back <- ent `gtkGet` entryText
-          callPaint paint [concatMap getPict picts] [] True curr back
- 
--- used by showPicts'
+          callPaint paint [concatMap getPict picts] [] True curr picEval spread
+                    back
 
         -- | Called by menu item /successors/ from menu /nodes/.
         showSucs :: Action
@@ -6010,9 +5976,8 @@ solver this solveRef enum paint = do
         showTerms = do
             terms <- readIORef termsRef
             if null terms then labGreen' "There are no terms to be reduced."
-            else do
-                enterTerms terms
-                labGreen' $ see "terms"
+            else do enterTerms terms
+                    labGreen' $ see "terms"
         
         -- | Used by 'removeClauses'. Called by menu items /show theorems/
         -- and /[show theorems].. in text field of SolverN/ from menu
@@ -6021,14 +5986,10 @@ solver this solveRef enum paint = do
         showTheorems b = do
             theorems <- readIORef theoremsRef
             if null theorems then labGreen' "There are no theorems."
-            else
-                if b then do
-                    enterFormulas' theorems
-                    labGreen' $ see "theorems"
-                else do
-                    solve <- readIORef solveRef
-                    bigWin solve
-                    enterFormulas solve theorems
+            else if b then do enterFormulas' theorems
+                              labGreen' $ see "theorems"
+                      else do solve <- readIORef solveRef; bigWin solve
+                              enterFormulas solve theorems
         
         -- | Called by menu item /[show theorems].. for symbols/ from menu
         -- /theorems/.
@@ -6048,7 +6009,7 @@ solver this solveRef enum paint = do
                     labGreen' $ see $ "theorems for " ++ showStrList xs
                 
 -- showTreePicts prepares the actual sequence of trees for being displayed in 
--- the painter window.
+-- the painter window and is used by showPicts'.
 
         showTreePicts :: Action
         showTreePicts = do
@@ -6065,10 +6026,13 @@ solver this solveRef enum paint = do
           setTime
           picts <- mapM runT $ mkPicts sizes
           curr <- readIORef currRef
+          picEval <- readIORef picEvalRef
+          spread <- readIORef spreadRef
           back <- ent `gtkGet` entryText
-          callPaint paint (map getPict picts) (indices_ trees) False curr back
+          callPaint paint (map getPict picts) (indices_ trees) False curr 
+                    picEval spread back
  
--- used by showPicts'
+-- 
 
         -- | Called by 'Epaint.Solver' and 'Epaint.Painter' buttons /simplifyDF/
         -- ('simplButD') and /simplifyBF/ ('simplButB'). Exported by public
@@ -6123,7 +6087,7 @@ solver this solveRef enum paint = do
                               simplifySubtree t sig limit simplStrat
                       else simplifyPar t sig treeposs []
         
--- used by simplify'
+        -- used by simplify'
 
         simplifyPar :: TermS -> Sig -> [[Int]] -> [[Int]] -> Action
         simplifyPar t sig (p:ps) qs =
@@ -6138,7 +6102,7 @@ solver this solveRef enum paint = do
             setProof True False "SIMPLIFYING THE SUBTREES" qs simplifiedPar
             clearAndDraw
         
--- used by simplify''
+        -- used by simplify''
 
         simplifySubtree :: TermS -> Sig -> Int -> Strategy -> Action
         simplifySubtree t sig limit strat = do
@@ -6462,8 +6426,8 @@ solver this solveRef enum paint = do
             else labMag "Select subtrees with the same predecessor!"
 
     return Solver
-        { addSpec         = addSpec'
-        , backWin         = backWin'
+        { addSpec         = addSpec
+        , backWin         = backWin
         , bigWin          = bigWin'
         , checkInSolver   = checkInSolver'
         , drawCurr        = drawCurr'
@@ -6495,7 +6459,6 @@ solver this solveRef enum paint = do
         , setNewTrees     = setNewTrees'
         , setSubst        = setSubst'
         , simplify        = simplify'
-        , iconify         = iconify'
         }
 
 -- ENUMERATOR messages

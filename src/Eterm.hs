@@ -93,10 +93,10 @@ incr,decr :: Eq a => (a -> Int) -> a -> a -> Int
 incr f x y = if x == y then f x+1 else f y
 decr f x y = if x == y then f x-1 else f y
 
-neg2 :: (Num t, Num t1) => (t, t1) -> (t, t1)
+neg2 :: (Num a,Num b) => (a,b) -> (a,b)
 neg2 (x,y) = (-x,-y)
 
-div2 :: (Fractional t, Fractional t1) => (t, t1) -> (t, t1)
+div2 :: (Fractional a, Fractional b) => (a,b) -> (a,b)
 div2 (x,y) = (x/2,y/2)
 
 add1 :: Num a => (a,a) -> a -> (a,a)
@@ -106,7 +106,7 @@ add2,sub2 :: Num a => (a,a) -> (a,a) -> (a,a)
 add2 (x,y) (a,b) = (a+x,b+y)
 sub2 (x,y) (a,b) = (a-x,b-y)
 
-apply2 :: (t -> t1) -> (t, t) -> (t1, t1)
+apply2 :: (a -> b) -> (a,a) -> (b,b)
 apply2 f (x,y) = (f x,f y)
 
 fromInt :: Int -> Double
@@ -131,7 +131,7 @@ minmax4 (x1,y1,x2,y2) (x1',y1',x2',y2') = (min x1 x1',min y1 y1',
 mkArray :: Ix a => (a,a) -> (a -> b) -> Array a b
 mkArray bounds f = array bounds [(i,f i) | i <- range bounds]
 
--- * Coloring
+-- COLORING
 
 isBW,deleted :: Color -> Bool
 isBW c     = c == black || c == white
@@ -143,13 +143,12 @@ fillColor c i bgc = if c == black || deleted c then bgc else mkLight i c
 outColor :: Color -> Int -> Color -> Color
 outColor c i bgc = if deleted c then bgc else mkLight i c
 
--- | @nextCol@ computes the successor of each color c c on a chromatic circle of 
+-- nextCol computes the successor of each color c c on a chromatic circle of 
 -- 6*255 = 1530 equidistant pure (or hue) colors. A color c is pure if c is 
 -- neither black nor white and at most one of the R-, G- and B-values of c is 
 -- different from 0 and 255.
 
 nextCol :: Color -> Color
-
 nextCol (RGB 255 0 n) | n < 255 = RGB 255 0 (n+1)        -- n = 0   --> red
 nextCol (RGB n 0 255) | n > 0   = RGB (n-1) 0 255        -- n = 255 --> magenta
 nextCol (RGB 0 n 255) | n < 255 = RGB 0 (n+1) 255        -- n = 0   --> blue 
@@ -220,11 +219,16 @@ magback   = Background "bg_magenta"
 redback   = Background "bg_red"
 redpulseback = Background "bg_redpulse"
 
--- * String functions
+-- STRING FUNCTIONS
 
 leader :: String -> String -> Bool
 leader "" _ = False
 leader x y  = head (words x) == y
+
+isPos,isQuant,isFix :: String -> Bool
+isPos x   = leader x "pos"
+isQuant x = leader x "All" || leader x "Any"
+isFix x   = leader x "mu" || leader x "nu"
 
 removeCommentL :: String -> String
 removeCommentL ('-':'-':_) = []
@@ -806,7 +810,8 @@ mkLists s = f s [] where f s s' (0:ns)     = s':f s [] ns
 traces :: Eq a => (a -> [a]) -> (a -> lab -> [a]) -> [lab] -> a -> a 
                -> [[Either a (lab,a)]]
 traces tr trL labs a last = f [a] a where
-                            f visited a = concat [do b <- tr a; g b $ Left b,
+                            f visited a = concat [do b <- tr a
+                                                     g b $ Left b,
                                                   do lab <- labs; b <- trL a lab
                                                      g b $ Right (lab,b)]
                              where g a next | a == last        = [[next]]
@@ -965,7 +970,7 @@ sortDoms s = (sort rel l,sort rel r)
 
 -- used by Epaint > matrix and Ecom > showMatrix
 
--- minis leq s computes the minima of s with respect to a partial order leq.
+-- minis le s computes the minima of s with respect to a partial order le.
 
 minis,maxis :: Eq a => RelFun a -> [a] -> [a]
 minis le = foldr f [] where f x (y:s) | le x y = f x s
@@ -1337,7 +1342,7 @@ curryrest sig p t = concat [do F "()" ts <- p; curryrest sig p $ applyL t ts,
                             do u <- p; curryrest sig p $ apply t u,
                             return t]
 
--- ** Parser of formulas
+-- Parser of formulas
 
 implication :: Sig -> Parser TermS
 implication sig = do t <- disjunct sig
@@ -2105,6 +2110,7 @@ instance Eq Special
                
 instance Ord Special  where _ <= _ = True
 
+type TermI = Term Int
 type TermS = Term String
 
 class Root a where undef :: a
@@ -2187,14 +2193,9 @@ mapTP f p (F a ts)   = F (f p a) $ zipWithSucs (mapTP f) p ts
 mapTP f _ (Hidden t) = Hidden t
 
 mapT2 :: (b -> c) -> Term (a,b) -> Term (a,c)
-mapT2 f (V (a,p))    = V (a,f p)
-mapT2 f (F (a,p) ts) = F (a,f p) $ map (mapT2 f) ts
+mapT2 f (V (a,b))    = V (a,f b)
+mapT2 f (F (a,b) ts) = F (a,f b) $ map (mapT2 f) ts
 mapT2 _ (Hidden t)   = Hidden t
-
-mapT3 :: (b -> c) -> Term (a,b,d) -> Term (a,c,d)
-mapT3 f (V (a,p,d))    = V (a,f p,d)
-mapT3 f (F (a,p,d) ts) = F (a,f p,d) $ map (mapT3 f) ts
-mapT3 _ (Hidden t)     = Hidden t
 
 foldT :: Root a => (a -> [b] -> b) -> Term a -> b
 foldT f (V a)    = f a []
@@ -2283,9 +2284,6 @@ labelRandom rand _ t = (t,rand)
 
 getPos :: String -> [Int]
 getPos = map read . tail . words
-
-isPos :: String -> Bool
-isPos x  = leader x "pos"
 
 mkPos0 :: [Int] -> String
 mkPos0 p = "pos " ++ unwords (map show p)
@@ -2393,8 +2391,6 @@ drawHidden :: TermS -> TermS
 drawHidden (F x ts)   = F x $ map drawHidden ts
 drawHidden (Hidden _) = leaf "hidden"
 drawHidden t          = t
-
--- used by Epaint > widgConst and Ecom > drawThis
 
 constrPositions sig = labPoss $ isConstruct sig
 
@@ -3427,10 +3423,6 @@ projection :: String -> Bool
 projection = just . parse (strNat "get")
 
 lambda x  = x `elem` words "fun rel"
-
-isQuant x = leader x "All" || leader x "Any"
-
-isFix x   = leader x "mu" || leader x "nu"
 
 binder    = isQuant ||| isFix
 
@@ -4472,6 +4464,7 @@ colorClasses sig = f where
 
 -- concept ts posExas negExas computes the minimal concept wrt the feature trees
 -- ts that satisfy the positive/negative examples posExas/negExas.
+
 concept :: [TermS] -> [[String]] -> [[String]] -> [[String]]
 concept ts posExas negExas = 
      if all (== length ts) $ map length $ posExas ++ negExas
@@ -4485,6 +4478,7 @@ concept ts posExas negExas =
 
 -- reduceExas ts exas combines subsets of exas covering a subconcept to single 
 -- examples.
+
 reduceExas :: [TermS] -> [[String]] -> [[String]]
 reduceExas ts exas = 
            if all (== length ts) $ map length exas
@@ -4506,7 +4500,7 @@ reduceExas ts exas =
                                           where exas' = map f $ indices_ zs
                                                 f = updList exa i . (zs!!)
 
--- * ITERATIVE EQUATIONS and INEQUATIONS
+-- ITERATIVE EQUATIONS and INEQUATIONS
 
 data IterEq = Equal String TermS | Diff String TermS deriving Eq
 
@@ -5497,9 +5491,9 @@ matchSubs sig xs t u = case (t,u) of
 
 -- used by Esolve > simplReducts
 
--- * Trees with node coordinates
+-- TREES with NODE COORDINATES
 
-type Sizes = (Int, String -> Int)
+type Sizes = (Int,String -> Int)
 
 sizes0 :: Sizes
 sizes0 = (6,const 0)
@@ -5853,7 +5847,7 @@ dissConstr _ _ _                = Nothing
     that satisfy @c@.
 -}
 mkPartitions
-    :: (Int -> [Term Int] -> Bool) -- type of c
+    :: (Int -> [TermI] -> Bool) -- type of c
     -> Int -- type of n
     -> TermS
     -> [TermS]
@@ -5901,7 +5895,7 @@ mkTrees c n h = if c 1 ts then map (mkTree 1) $ foldl f [ts] [0..h-1] else []
 
 -- | partition constraints
 
-partConstr :: TermS -> Maybe (Int -> [Term Int] -> Bool)
+partConstr :: TermS -> Maybe (Int -> [TermI] -> Bool)
 partConstr (F "|" ts)      = do fs <- mapM partConstr ts
                                 Just (foldl1 h fs)
                                 where h f g n ts = f n ts || g n ts
