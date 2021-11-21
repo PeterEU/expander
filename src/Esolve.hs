@@ -959,9 +959,10 @@ filterTerms sig p (t:ts) = do ts <- filterTerms sig p ts
 filterTerms _ _ _        = Just []
 
 applyDrawFun :: Sig -> TermS -> TermS -> TermS
-applyDrawFun sig drawFun t = if drawFun == leaf "id" then t
-                             else mapW $ simplifyIter sig 
-                                       $ F "$" [drawFun,add1ToPoss t] 
+applyDrawFun sig drawFun t | drawFun == leaf "id"     = t
+                           | drawFun == leaf "expand" = expand 0 t []
+                           | True = mapW $ simplifyIter sig 
+                                         $ F "$" [drawFun,add1ToPoss t] 
      where mapW :: TermS -> TermS
            mapW (F "$" [F "$" [F "mapW" [m],f],t]) | just m' = g t pt
               where m' = parsePnat m
@@ -1144,40 +1145,41 @@ simplifyF _ (F "$" [F "mapG" [f@(F _ ts)],F x us@(_:_)]) | collector x =
                                         p i = [1,i]; q i = [i,1]
 
 simplifyF _ (F "$" [F "replicateG" [t],u]) | just n =
-                   jList $ changePoss [1] [0] u:replicate (get n-1) (mkPos [0])
-                   where n = parsePnat t
+                    jList $ changePoss [1] [0] u:replicate (get n-1) (mkPos [0])
+                    where n = parsePnat t
 
-simplifyF _ (F "concat" [F "[]" ts]) | all isList ts =
-                              jList $ concatMap (subterms . f) ts
-                              where subs i = subterms $ ts!!i
-                                    f t = foldl g t $ indices_ ts
-                                    g t i = foldl (h i) t $ indices_ $ subs i
-                                    h i t k = changePoss [0,i,k] [lg (i-1)+k] t
-                                    lg (-1) = 0
-                                    lg i    = lg (i-1) + length (subs i)
+simplifyF _ (F "concat" [t@(F "[]" ts)]) | all isList ts =
+                    if all isList ts then jList $ concatMap (subterms . f) ts
+                    else Just $ apply (apply (F "foldl" [leaf "++"]) mkNil) t
+                    where subs i = subterms $ ts!!i
+                          f t = foldl g t $ indices_ ts
+                          g t i = foldl (h i) t $ indices_ $ subs i 
+                          h i t k = changePoss [0,i,k] [lg (i-1)+k] t
+                          lg (-1) = 0
+                          lg i    = lg (i-1) + length (subs i)
 
 simplifyF sig (F "$" [F "concRepl" [t],u@(F "[]" us)]) | just n =
                    simplifyF sig $ F "concat" [addToPoss [0] $ mkList vs]
                    where n = parsePnat t
-                         vs = changePoss [1] [0] u:replicate (get n-1)
-                                                 (mkList $ map f $ indices_ us)
+                         vs = changePoss [1] [0] u:
+                              replicate (get n-1) (mkList $ map f $ indices_ us)
                          f i = mkPos [0,i]
 
 simplifyF _ (F "$" [F "**" [f,t],u]) | just n =   -- collapse into first f-occ.
-                  Just $ if null $ subterms f then iterate (apply f) v!!m
-                         else apply copy $ iterate (apply $ mkPos [0]) v!!(m-1)
-                  where n = parsePnat t; m = get n
-                        v = changePoss [1] (replicate m 1) u
-                        copy = changePoss [0,0] [0] f
+                   Just $ if null $ subterms f then iterate (apply f) v!!m
+                          else apply copy $ iterate (apply $ mkPos [0]) v!!(m-1)
+                   where n = parsePnat t; m = get n
+                         v = changePoss [1] (replicate m 1) u
+                         copy = changePoss [0,0] [0] f
 
 simplifyF _ (F "$" [F "***" [f,t],u]) | just n =  -- collapse into last f-occ.
-               Just $ if null $ subterms f then iterate (apply f) v!!m
-                      else iterate (apply $ mkPos funpos) (apply copy v)!!(m-1)
-               where n = parsePnat t; m = get n
-                     v = changePoss [1] (replicate m 1) u
-                     funpos = replicate (m-1) 1++[0]
-                     copy = changePoss [0,0] funpos f
-                  -- collapse into last copy of f
+                Just $ if null $ subterms f then iterate (apply f) v!!m
+                       else iterate (apply $ mkPos funpos) (apply copy v)!!(m-1)
+                where n = parsePnat t; m = get n
+                      v = changePoss [1] (replicate m 1) u
+                      funpos = replicate (m-1) 1++[0]
+                      copy = changePoss [0,0] funpos f
+                   -- collapse into last copy of f
 
 simplifyF _ (F "$" [F x [n],F "[]" ts])
            | x `elem` words "cantor hilbert mirror snake transpose" && just k =
@@ -1931,24 +1933,26 @@ simplifyT (F "getCols" [F x ts]) = Just $ if null z then F x $ map f ts
                                    where (col,z) = span (/= '$') x
                                          f t = F "erect" [t]
 
-simplifyT (F "bag" [F x ts])     | collector x = Just $ mkBag ts
+simplifyT (F "bag" [F x ts])      | collector x = Just $ mkBag ts
 
-simplifyT (F "tup" [F x ts])     | collector x = Just $ mkTup ts
+simplifyT (F "tup" [F x ts])      | collector x = Just $ mkTup ts
+          
+simplifyT (F "initup" [F x ts,t]) | collector x = Just $ mkTup $ ts++[t]
 
-simplifyT (F "branch" [F x ts])  | collector x = Just $ mkSum ts
+simplifyT (F "branch" [F x ts])   | collector x = Just $ mkSum ts
 
-simplifyT (F "set" [F x ts])     | collector x = Just $ mkSetTerm ts
+simplifyT (F "set" [F x ts])      | collector x = Just $ mkSetTerm ts
 
-simplifyT (F "null" [F x ts])    | collector x = jConst $ null ts
+simplifyT (F "null" [F x ts])     | collector x = jConst $ null ts
 
-simplifyT (F "NOTnull" [F x ts]) | collector x = jConst $ not $ null ts
+simplifyT (F "NOTnull" [F x ts])  | collector x = jConst $ not $ null ts
 
-simplifyT (F "column" [F x ts])  | collector x =
-                                            Just $ leaf $ tail $ concatMap f ts
-                                            where f t = '\'':showTerm0 t
+simplifyT (F "column" [F x ts])   | collector x =
+                                             Just $ leaf $ tail $ concatMap f ts
+                                             where f t = '\'':showTerm0 t
 
-simplifyT (F "prodL" [F x ts])   | all collector (x:map root ts) =
-                               jList $ map mkTup $ accumulate $ map subterms ts
+simplifyT (F "prodL" [F x ts])    | all collector (x:map root ts) =
+                                jList $ map mkTup $ accumulate $ map subterms ts
 
 simplifyT t | f == "curry" && notnull tss && length us == 1 =
                                         Just $ applyL (head us) $ concat uss
@@ -1959,19 +1963,20 @@ simplifyT (F "index" [t,F x ts])
                          | collector x = do i <- search (eqTerm t) ts; jConst i
 
 simplifyT (F "indices" [F x ts])
-                         | collector x = jList $ map mkConst [0..length ts-1]
+                          | collector x = jList $ map mkConst [0..length ts-1]
 
 simplifyT (F "singles" [F x ts])
-                         | collector x = jList $ map (mkList . single) ts
+                          | collector x = jList $ map (mkList . single) ts
 
-simplifyT (F "subsets" [F x ts]) | collector x = jList $ map (F x) subs
-                       where subs = [map (ts!!) ns | ns <- subsetsB lg lg]
-                             lg = length ts
+simplifyT (F "subsets" [F x ts]) 
+                          | collector x = jList $ map (F x) subs
+                             where subs = [map (ts!!) ns | ns <- subsetsB lg lg]
+                                   lg = length ts
 
-simplifyT (F "subsetsB" [F x ts,t]) | collector x && just i =
-                       jList $ map (F x) subs
-                       where lg = length ts; i = parseInt t
-                             subs = [map (ts!!) ns | ns <- subsetsB lg $ get i]
+simplifyT (F "subsetsB" [F x ts,t]) 
+                          | collector x && just i =jList $ map (F x) subs
+                        where lg = length ts; i = parseInt t
+                              subs = [map (ts!!) ns | ns <- subsetsB lg $ get i]
 
 simplifyT (F "perms" [F "[]" ts])   = jList $ map mkList $ perms ts
 

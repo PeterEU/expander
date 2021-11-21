@@ -1,6 +1,6 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-
-Module      : Eterm (update from July 20, 2021)
+Module      : Eterm (update from November 15, 2021)
 Copyright   : (c) Peter Padawitz and Jos Kusiek, 2021
 License     : BSD3
 Stability   : experimental
@@ -133,59 +133,48 @@ mkArray bounds f = array bounds [(i,f i) | i <- range bounds]
 
 -- COLORING
 
-isBW,deleted :: Color -> Bool
-isBW c     = c == black || c == white
-deleted c  = c == RGB 1 2 3
-
-fillColor :: Color -> Int -> Color -> Color
-fillColor c i bgc = if c == black || deleted c then bgc else mkLight i c
-
-outColor :: Color -> Int -> Color -> Color
-outColor c i bgc = if deleted c then bgc else mkLight i c
+fillColor,outColor :: Color -> Int -> Color -> Color
+fillColor c i bgc = if c == black then bgc else outColor c i bgc
+outColor c i bgc  = if c == white then bgc else mkLight i c
 
 -- nextCol computes the successor of each color c c on a chromatic circle of 
 -- 6*255 = 1530 equidistant pure (or hue) colors. A color c is pure if c is 
 -- neither black nor white and at most one of the R-, G- and B-values of c is 
 -- different from 0 and 255.
 
-nextCol :: Color -> Color
+nextCol,complColor :: Color -> Color
 nextCol (RGB 255 0 n) | n < 255 = RGB 255 0 (n+1)        -- n = 0   --> red
 nextCol (RGB n 0 255) | n > 0   = RGB (n-1) 0 255        -- n = 255 --> magenta
 nextCol (RGB 0 n 255) | n < 255 = RGB 0 (n+1) 255        -- n = 0   --> blue 
 nextCol (RGB 0 255 n) | n > 0   = RGB 0 255 (n-1)        -- n = 255 --> cyan 
 nextCol (RGB n 255 0) | n < 255 = RGB (n+1) 255 0        -- n = 0   --> green
 nextCol (RGB 255 n 0) | n > 0   = RGB 255 (n-1) 0        -- n = 255 --> yellow
-nextCol c | isBW c || deleted c = c 
-          | True                = nextCol $ getHue c
-
-getHue,complColor :: Color -> Color
-getHue (RGB r g b) = RGB (f 0) (f 1) (f 2) where s = [r,g,b]
-                                                 low:mid:_ = qsort rel [0,1,2] 
-                                                 rel i j = s!!i <= s!!j
-                                                 f i | i == low = 0 
-                                                     | i == mid = s!!i
-                                                     | True     = 255
+nextCol c = if c `elem` [black,white] then c else nextCol $ f c where
+                             f (RGB r g b) = RGB (h 0) (h 1) (h 2) 
+                                             where s = [r,g,b]
+                                                   low:mid:_ = qsort rel [0,1,2] 
+                                                   rel i j = s!!i <= s!!j
+                                                   h i | i == low = 0 
+                                                       | i == mid = s!!i
+                                                       | True     = 255
+complColor c = iterate nextCol c!!765
 
 isHue :: Color -> Bool
 isHue (RGB r g b) = all (`elem` [0..255]) [r,g,b] &&
-                      [[0,255],[255,0]] `shares` [[r,g],[g,b],[b,r]]
-
-complColor c = iterate nextCol c!!765
+                    [[0,255],[255,0]] `shares` [[r,g],[g,b],[b,r]]
   
 -- | @hue mode col n i@ computes the i-th successor of c in a chromatic circle
 -- of n <= 1530 equidistant pure colors.
 
-hue :: Int -- type of mode 
-    -> Color -- type of col
-    -> Int -- type of n
-    -> Int -- type of i
-    -> Color
+hue :: Int -> Color -> Int -> Int -> Color
 hue 0 col n i = iterate nextCol col!!(i*1530`div`n)
                                   -- round (fromInt i*1530/fromInt n)
 hue 1 col n i | i > 0 = if odd i then complColor $ hue 1 col n $ i-1
                                  else nextColor 0 (n`div`2) $ hue 1 col n $ i-2
 hue 2 col n i = if odd i then complColor d else d where d = hue 0 col n i
 hue 3 col n i = if odd i then complColor d else d where d = hue 0 col (2*n) i
+hue 4 col n i = if odd i then hue 4 col n $ i-1 else hue 0 col n i
+hue 5 col n i = iterate nextCol col!!((n-i+1)*1530`div`n)
 hue _ col _ _ = col
 
 nextColor :: Int -> Int -> Color -> Color
@@ -229,6 +218,8 @@ isPos,isQuant,isFix :: String -> Bool
 isPos x   = leader x "pos"
 isQuant x = leader x "All" || leader x "Any"
 isFix x   = leader x "mu" || leader x "nu"
+
+binder    = isQuant ||| isFix
 
 removeCommentL :: String -> String
 removeCommentL ('-':'-':_) = []
@@ -355,6 +346,9 @@ lookupL1 _ _           = []
 lookupL2 :: Eq a => a -> [(a,b,c)] -> [(b,c)]
 lookupL2 a ((x,y,z):s) = if a == x then (y,z):lookupL2 a s else lookupL2 a s
 lookupL2 _ _           = []
+
+lookupT :: (Eq a,Eq b) => a -> b -> [(a,b,TermS)] -> TermS
+lookupT a b s = case lookupL a b s of Just t -> t; _ -> V ""
 
 -- i in invertRel iss as!!a iff a in iss!!i.
 
@@ -926,17 +920,16 @@ binsToObddP n ns bins = collapse True $ removeVar $ trans 0 $ setToFun bins
 -- characteristic function f :: {'0','1','#'}^n -> Bool of an equivalent DNF and
 -- the number n of Boolean variables of t.
 
-obddToFun t = (f t &&& g,dim)
-    where f (F "0" [])        = const False
-          f (F "1" [])        = const True
-          f (F ('x':i) [t,u]) = f t &&& h '0' ||| f u &&& h '1'
-                                where h a bin = bin!!read i == a
-          f (V x) | isPos x   = f $ getSubterm t $ getPos x
-          f _                 = error "obddToFun"
-          varInds (F ('x':i) [t,u]) = varInds t `join` varInds u `join1` read i
-          varInds _                 = []
-          dim = if null is then 0 else maximum is+1; is = varInds t
-          g bin = all (== '#') $ map (bin!!) $ [0..dim-1] `minus` is
+obddToFun t = (f t &&& g,dim) where
+               f (F "0" [])        = const False
+               f (F "1" [])        = const True
+               f (F ('x':i) [t,u]) = f t &&& h '0' ||| f u &&& h '1'
+                                     where h a bin = bin!!read i == a
+               f (V x) | isPos x   = f $ getSubterm t $ getPos x
+               f _                 = error "obddToFun"
+               varInds (F ('x':i) [t,u]) = varInds t `join` (read i):varInds u
+               dim = if null is then 0 else maximum is+1; is = varInds t
+               g bin = all (== '#') $ map (bin!!) $ [0..dim-1] `minus` is
 
 -- * Sorting and permuting
 
@@ -1586,7 +1579,7 @@ updRel rel a bs = case searchGet ((== a) . fst) rel of
                        Just (i,(_,cs)) -> updList rel i (a,bs `join` cs)
                        _ -> (a,bs):rel
 
--- used by tripsToFun and Esolve > relToPairs,sigrest	
+-- used by tripsToFun and Esolve > relToPairs,sigrest   
 
 funToList :: Eq b => [a] -> [b] -> (a -> [b]) -> [[Int]]
 funToList as bs f = foldl g [] $ indices_ as 
@@ -2029,7 +2022,7 @@ nextLR _ _ _ _ = NoParse
 
 -- linear equations (polynomials)
 
-type LinEq = ([(Double,String)],Double)   -- a1*x1+...+an*xn+a*x = b
+type LinEq = ([(Double,String)],Double)   -- a1*x1+...+an*xn = b
 
 combLins :: (Double -> Double -> Double) -> Double -> LinEq -> LinEq -> LinEq
 combLins f c (ps,a) (qs,b) = (comb ps qs,f a b)
@@ -2050,21 +2043,24 @@ subLin = combLins (-) $ -1
 mulLin :: (Double -> Double) -> LinEq -> LinEq
 mulLin f (ps,b) = (map h ps,f b) where h (a,x) = (f a,x)
 
--- gauss solves linear equations.
+-- gauss solves eqs and represents the solution ai/xi, 1<=i<=n, as the set of 
+-- equations x1=a1,...,xn=an
 
 gauss :: [LinEq] -> Maybe [LinEq]
 gauss eqs = case gauss1 eqs of 
-                  Just eqs -> gauss $ gauss3 eqs
-                  _ -> case gauss2 eqs of Just eqs -> gauss $ gauss3 eqs
-                                          _ -> Just eqs
+                 Just eqs -> gauss $ gauss3 eqs
+                 _ -> case gauss2 eqs of Just eqs -> gauss $ gauss3 eqs
+                                         _ | all solved eqs -> Just eqs
+                                           | True ->  error "gauss error"
+            where solved ([(1,_)],_) = True; solved _ = False
 
--- a1*x1+...+an*xn+a*x = b ----> a1/a*x1+...+an/a*xn+x = b/a
+-- a1*x1+...+an*xn+a*x = b ~~> a1/a*x1+...+an/a*xn+x = b/a
                   
 gauss1 :: [LinEq] -> Maybe [LinEq]
 gauss1 eqs = do (i,a) <- searchGet (/= 1) $ map (fst . last . fst) eqs
                 Just $ updList eqs i $ mulLin (/a) $ eqs!!i
 
--- p+x = b & q+x = c ----> p-q = b-c & q+x = c
+-- p+x = b & q+x = c ~~> p-q = b-c & q+x = c
 
 gauss2 :: [LinEq] -> Maybe [LinEq]
 gauss2 eqs = do (i,eq,eq') <- searchGet2 f g eqs
@@ -2072,7 +2068,7 @@ gauss2 eqs = do (i,eq,eq') <- searchGet2 f g eqs
              where f (ps,_)        = fst (last ps) == 1
                    g (ps,_) (qs,_) = last ps == last qs
 
--- x = b & eqs ----> x = b & eqs[(ps = c-a*b)/(a*x+ps = c)]
+-- x = b & eqs ~~> x = b & eqs[(ps = c-a*b)/(a*x+ps = c)]
 
 gauss3 :: [LinEq] -> [LinEq]
 gauss3 = f []
@@ -2149,33 +2145,29 @@ outdegree _        = 0
 
 isLeaf :: Term t -> Bool
 isLeaf = null . subterms
-
-height :: (Num a, Ord a) => Term t -> a
-height (F _ ts) = foldl max 0 (map height ts)+1
-height _        = 1
-
-sizeAll :: Num a => Term t -> a
-sizeAll (F _ ts) = sum (map sizeAll ts)+1
-sizeAll _        = 1
+ 
+height,sizeAll :: Root a => Term a -> Int
+height  = foldT f where f _ [] = 1
+                        f _ hs = maximum hs+1
+sizeAll = foldT f where f _ sizes = sum sizes+1
  
 --- instance Eq a => Ord (Term a) where t <= u = sizeAll t <= sizeAll u
-size :: Num a => TermS -> a
+
+size :: TermS -> Int
 size (V x)    = if isPos x then 0 else 1
 size (F _ ts) = sum (map size ts)+1
 size _        = 1
 
-takeT :: (Eq r, Num r) => r -> Term a -> Term a
+takeT :: Int -> Term a -> Term a
 takeT 1 (F x _)  = F x []
 takeT n (F x ts) = F x $ map (takeT $ n-1) ts
 takeT _ t        = t
 
-isin :: Eq a => a -> Term a -> Bool
+isin,notIn :: Eq a => a -> Term a -> Bool
 x `isin` V y    = x == y
 x `isin` F y ts = x == y || any (isin x) ts
 x `isin` _      = False
-
-notIn :: Eq a => a -> Term a -> Bool
-notIn x = not . isin x
+notIn x         = not . isin x
 
 mapConsts :: (a -> a) -> Term a -> Term a
 mapConsts f (F a []) = leaf $ f a
@@ -3168,23 +3160,19 @@ parseBins t = do s <- parseList (parse quoted . root) t
                                    &&  all (all (`elem` "01#")) s
                  Just s
 
--- parseBool (F "0" []) = Just False
--- parseBool t          = do F "1" [] <- Just t; Just True
--- OHaskell fix: This might be used for gifs in Epaint.
-
 parseChar t   = do F [c] [] <- Just t; Just c
 
 parseConst t  = do F a [] <- Just t; Just a
 
 parsePair :: TermS -> Maybe (String,[String])
-parsePair t = do F "()" [t,u] <- Just t; ts <- parseList' u
+parsePair t = do F "()" [t,u] <- Just t; ts <- parseList Just u++Just [u]
                  Just (showTerm0 t,map showTerm0 ts)
 
 -- used by Epaint > matrix and Ecom > transformGraph
 
 parseTrip :: TermS -> Maybe (String,String,[String])
 parseTrip t = do F "()" [t,u,v] <- Just t; let [c,d] = map showTerm0 [t,u]
-                 ts <- parseList' v; Just (c,d,map showTerm0 ts)
+                 ts <- parseList Just v++Just [v]; Just (c,d,map showTerm0 ts)
 
 -- used by Epaint > matrix and Ecom > transformGraph
 
@@ -3197,18 +3185,17 @@ parseTripT t = do F "()" [t,u,v] <- Just t; let [c,d] = map showTerm0 [t,u]
 type Termparser a = TermS -> Maybe a
 
 parseList :: Termparser a -> Termparser [a]
-parseList f t  = do F "[]" ts <- Just t; mapM f ts
-
-parseList' :: Termparser [TermS]
-parseList' t = parseList Just t ++ Just [t]
+parseList f t = do F "[]" ts <- Just t; mapM f ts
 
 type TermparserT m a = TermS -> MaybeT m a
 
-parseListT,parseListT' :: Monad m =>  TermparserT m a ->  TermparserT m [a]
-parseListT f t  = case t of F "[]" ts -> mapM f ts; _ -> zero
-parseListT' f t = parseListT f t ++ do a <- f t; return [a]
+parseListT :: Monad m => TermparserT m [a] -> TermparserT m [a]
+parseListT f t = do ass <- concat [case t of F "[]" ts -> mapM f ts; _ -> zero,
+                                   do a <- f t; return [a]]
+                    return $ concat ass
 
-parseColl p t   = do F x ts <- Just t; guard $ collector x; mapM p ts
+parseColl :: (TermS -> Maybe a) -> TermS -> Maybe [a]
+parseColl p t = do F x ts <- Just t; guard $ collector x; mapM p ts
 
 -- used by Ecom > transformGraph
 
@@ -3226,19 +3213,16 @@ parseInt t = do a <- parseConst t; parse int a
 
 parseReal :: TermS -> Maybe Double
 parseReal t = do a <- parseConst t; parse real a
- 
-parseReals :: TermS -> TermS -> Maybe (Double,Double)
-parseReals t u = do a <- parseReal t; b <- parseReal u; Just (a,b)
 
-parseIntQuad :: TermS -> Maybe (Int, Int, Int, Int)
+parseIntQuad :: TermS -> Maybe (Int,Int,Int,Int)
 parseIntQuad t = do F "()" [i,j,b,h] <- Just t; i <- parseInt i; j <- parseInt j
                     b <- parseInt b; h <- parseInt h; Just (i,j,b,h)
 
-parseRealReal :: TermS -> Maybe (Double, Double)
+parseRealReal :: TermS -> Maybe (Double,Double)
 parseRealReal t = do F "()" [r,s] <- Just t; r <- parseReal r; s <- parseReal s
                      Just (r,s)
 
-parseRealPair :: TermS -> Maybe ((Double, Double), Double)
+parseRealPair :: TermS -> Maybe ((Double,Double),Double)
 parseRealPair t = do F "()" [p,r] <- Just t; p <- parseRealReal p
                      r <- parseReal r; Just (p,r)
 
@@ -3423,8 +3407,6 @@ projection :: String -> Bool
 projection = just . parse (strNat "get")
 
 lambda x  = x `elem` words "fun rel"
-
-binder    = isQuant ||| isFix
 
 logical x = propositional x || x `elem` words "True False Not" || isQuant x
 
@@ -4123,6 +4105,7 @@ splitEq sig b = f where
 
 -- polarity True t p returns the polarity of the subformula at position
 -- p of t. This determines the applicability of inference rules at p.
+
 polarity :: Bool -> TermS -> [Int] -> Bool
 polarity pol (F "===>" [t,_]) (0:p) = polarity (not pol) t p
 polarity pol (F "===>" [_,t]) (1:p) = polarity pol t p
@@ -4147,6 +4130,7 @@ monotone _ xs = f True
 
 -- polTree True [] t replaces the node entries of t by the polarities of the
 -- respective subtreees.
+
 polTree :: Bool -> [Int] -> TermS -> [[Int]]
 polTree pol p (F "===>" [t,u]) = if pol then p:ps1++ps2 else ps1++ps2
                                  where ps1 = polTree (not pol) (p++[0]) t
@@ -4163,6 +4147,7 @@ polTree pol p _                      = [p | pol]
 
 -- natToLabel t and natToPos t turn t into a function that maps, for each node n
 -- of t, the position of n in heap order to the label resp. tree position of n.
+
 natToLabel :: Root a => Term a -> Int -> Maybe a
 natToLabel t = mkFun [t] (const Nothing) $ -1
                where mkFun [] f _ = f
@@ -4171,7 +4156,7 @@ natToLabel t = mkFun [t] (const Nothing) $ -1
                                           n = m+length ts
                                           vals = map (Just . root) ts
 
--- level/pre/heap/hillTerm col lab t labels each node of t with its position 
+-- level/preord/heap/hillTerm col lab t labels each node of t with its position 
 -- within t with respect to level, prefix, heap or hill order. lab labels the 
 -- nodes of t in accordance with the color function hue 0 col n where n is the
 -- maximum of positions of t and col is the start color.
@@ -4442,7 +4427,7 @@ outGraph sts labs ats out outL = f where
 -- used by Ecom > showTrans
 
 enterAtoms :: [String] -> String
-enterAtoms []       = "�"
+enterAtoms []       = "?"
 enterAtoms [at]     = at
 enterAtoms (at:ats) = at++concatMap ('\'':) ats
 
@@ -4451,6 +4436,7 @@ enterAtoms (at:ats) = at++concatMap ('\'':) ats
 -- colorClasses{L} colors equivalent states of a transition graph with the same
 -- color and equivalent states with different colors unless they belong to 
 -- singleton equivalence classes. Such states are blackened.
+
 colorClasses :: Sig -> TermS -> TermS
 colorClasses sig = f where
           f (F a ts) = F (if a `notElem` sts then a else setColor a) $ map f ts
@@ -4579,7 +4565,7 @@ substituteVars t eqs ps = do guard $ all isV ts
                                                 u = get t
 
 -- solveRegEq turns a regular equation x = t1*x+...+tn*x+t into its least 
--- solution star(t1+...+t2)*t, which is unique if eps =/= ti for all 1≤i≤n.
+-- solution star(t1+...+tn)*t, which is unique if eps =/= ti for all 1<=i<=n.
 
 solveRegEq :: Sig -> IterEq -> Maybe TermS
 solveRegEq sig (Equal x t) = do (e,_) <- parseRE sig $ f $ case t of
@@ -4611,7 +4597,7 @@ parseSol f t = case t of F "True" [] -> Just []
                      h x = if isPos x then mkPos0 $ tail $ tail $ getPos x 
                                       else x
 
--- used by parseEqs,isSol, Epaint > solPict and Esolve > solveGuard
+-- used by parseEqs,isSol, Epaint > solPic and Esolve > solveGuard
 
 isSol :: Sig -> TermS -> Bool
 isSol sig = just . parseSol (solAtom sig) ||| isFalse
