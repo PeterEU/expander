@@ -173,8 +173,8 @@ canvasSize :: Attr Canvas Pos
 canvasSize = newNamedAttr "size" canvasGetSize canvasSetSize
 
 canvasBackground :: Attr Canvas Color
-canvasBackground
-    = newNamedAttr "background" canvasGetBackground canvasSetBackground
+canvasBackground = newNamedAttr "background" canvasGetBackground 
+                                             canvasSetBackground
 
 canvasCursor :: WriteAttr Canvas CursorType
 canvasCursor = writeNamedAttr "cursor" canvasSetCursor
@@ -205,8 +205,7 @@ interpolate' pss@(p1:p2:_:_) = p1:q1:interpolate0 pss
           csub = calc (-)
           cadd = calc (+)
           -- mul = calc (*)
-          tangent = if closed then norm $!! csub p2 p0
-                    else csub p2 p1
+          tangent = if closed then norm $!! csub p2 p0 else csub p2 p1
           q1 = if closed
                then cadd p1 $ skalar (scl * mag (csub p2 p1)) tangent
                else cadd p1 $ skalar scl tangent
@@ -214,13 +213,11 @@ interpolate' pss@(p1:p2:_:_) = p1:q1:interpolate0 pss
             where tangent' = norm $!! csub p2' p0'
                   q0' = csub p1' $!! skalar (scl * mag (csub p1' p0')) tangent'
                   q1' = cadd p1' $!! skalar (scl * mag (csub p2' p1')) tangent'
-          interpolate0 [p0', p1'] = [q0', p1']
-            where tangent' = if closed then norm $!! csub p2 p0'
-                            else csub p1' p0'
-                  q0' = if closed
-                       then csub p1'
-                              $!! skalar (scl * mag (csub p1' p0')) tangent'
-                       else csub p1' (skalar scl tangent')
+          interpolate0 [p0', p1'] = [q0', p1'] where
+             tangent' = if closed then norm $!! csub p2 p0' else csub p1' p0'
+             q0' = if closed then csub p1' $!! 
+                                      skalar (scl * mag (csub p1' p0')) tangent'
+                             else csub p1' $ skalar scl tangent'
           interpolate0 _ = error $ "Gui.interpolate: interpolate' should never "
                                    ++ "be called with list of length < 2."
 interpolate' pss = pss                         
@@ -477,7 +474,7 @@ canvas = do
                         SW -> y - height
                         S -> y - height
                         SE -> y - height
-            in (x', y')
+            in (x',y')
         
         canvasImage :: Pos -> ImageOpt -> Image -> Action
         canvasImage pos opt (Image alpha image) = do
@@ -486,26 +483,21 @@ canvas = do
           surface <- readIORef surfaceRef
           width <- fromIntegral <$> pixbufGetWidth image
           height <- fromIntegral <$> pixbufGetHeight image
-          let (x, y)   = fromInt2 pos
-              (x', y') = getAnchorPos x y width height anchor
-          renderWith surface $ do
-              setSourcePixbuf image x' y'
-              rotate $ imageRotate opt
-              scale sclFactor sclFactor
-              paint
+          let (x,y)   = fromInt2 pos
+              (x',y') = getAnchorPos x y width height anchor
+          renderWith surface $ do setSourcePixbuf image x' y'
+                                  rotate $ imageRotate opt
+                                  scale sclFactor sclFactor
+                                  paint
           widgetQueueDraw drawingArea
-          where
-            anchor      = imageAnchor opt
-            sclFactor   = imageScale opt
-            
+          where anchor      = imageAnchor opt
+                sclFactor   = imageScale opt
         
         clear = do
             surface <- readIORef surfaceRef
             background <- readIORef backgroundRef
-            
-            renderWith surface $ do
-                setColor background
-                paint
+            renderWith surface $ do setColor background
+                                    paint
 
         canvasSave file = do
           createDirectoryIfMissing True $ takeDirectory file
