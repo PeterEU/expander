@@ -779,15 +779,16 @@ solver this solveRef enum paint = do
                         windowDefaultHeight := 820]
           let da = getDrawingArea canv
           widgetAddEvents  da [ButtonMotionMask]
-          da `on` buttonPressEvent $ do
+          on da buttonPressEvent $ do
               button <- eventButton
-              pt <- round2 <$> eventCoordinates
+              pt0 <- eventCoordinates
+              let pt = round2 pt0
               lift $ case button of LeftButton -> catchSubtree pt
                                     MiddleButton -> catchTree pt
                                     RightButton -> catchNode pt
                                     _ -> done
               return False
-          da `on` motionNotifyEvent $ do
+          on da motionNotifyEvent $ do
               lift $ do
                   dw <- widgetGetParentWindow da
                   (_, x, y, modifier) <- drawWindowGetPointerPos dw
@@ -825,26 +826,26 @@ solver this solveRef enum paint = do
               return False
           fmap Just labFont >>= widgetOverrideFont lab
           setBackground lab blueback
-          lab `gtkSet` [labelLabel := start]
-          lab `on` keyPressEvent $ do
-                   name <- unpack <$> eventKeyName
-                   lift $ case name of "c" -> copySubtrees
-                                       "d" -> distribute
-                                       "i" -> replaceText
-                                       "l" -> replaceNodes
-                                       "L" -> randomLabels
-                                       "m" -> permuteSubtrees
-                                       "n" -> negateAxioms
-                                       "o" -> removeNode
-                                       "p" -> removePath
-                                       "r" -> removeSubtrees
-                                       "s" -> saveProof
-                                       "T" -> randomTree
-                                       "v" -> reverseSubtrees
-                                       "x" -> showAxiomsFor
-                                       "Left" -> incrCurr False
-                                       "Right" -> incrCurr True
-                                       _ -> done
+          gtkSet lab [labelLabel := start]
+          on lab keyPressEvent $ do
+                   name <- eventKeyName
+                   lift $ case unpack name of "c" -> copySubtrees
+                                              "d" -> distribute
+                                              "i" -> replaceText
+                                              "l" -> replaceNodes
+                                              "L" -> randomLabels
+                                              "m" -> permuteSubtrees
+                                              "n" -> negateAxioms
+                                              "o" -> removeNode
+                                              "p" -> removePath
+                                              "r" -> removeSubtrees
+                                              "s" -> saveProof
+                                              "T" -> randomTree
+                                              "v" -> reverseSubtrees
+                                              "x" -> showAxiomsFor
+                                              "Left" -> incrCurr False
+                                              "Right" -> incrCurr True
+                                              _ -> done
                    return False
           fmap Just labFont >>= widgetOverrideFont lab2
           setBackground lab2 blueback
@@ -911,7 +912,7 @@ solver this solveRef enum paint = do
           mkBut axsMenu "remove in entry field" $ removeClauses 0
           mkBut axsMenu ".. for symbols" removeAxiomsFor
           
-          writeIORef fontRef =<< fontDescriptionFromString initialFont
+          fontDescriptionFromString initialFont >>= writeIORef fontRef
           fontBut <- getObject castToFontButton "fontBut"
           fontBut `gtkSet` [fontButtonUseSize  := False,
                             fontButtonFontName := initialFont]
@@ -1119,29 +1120,26 @@ solver this solveRef enum paint = do
           treeSize `on` valueChanged $ drawNewCurr
           
           horBut <- getObject castToScale "horBut"
-          horBut `on` valueChanged $ do
-              val <- truncate <$> horBut `gtkGet` rangeValue
-              blowHor val
-              drawNewCurr
+          on horBut valueChanged $ do val <- gtkGet horBut rangeValue
+                                      blowHor $ truncate val
+                                      drawNewCurr
           
           verBut <- getObject castToScale "verBut"
-          verBut `on` valueChanged $ do
-              val <- truncate <$> verBut `gtkGet` rangeValue
-              blowVer val
-              drawShrinked            
+          on verBut valueChanged $ do val <- gtkGet verBut rangeValue
+                                      blowVer $ truncate val
+                                      drawShrinked            
 
-          -- Scroll support for canvas
+          -- scroll support for canvas
           containerAdd scrollCanv $ getDrawingArea canv
           changeCanvasBackground white
 
-          win `on` deleteEvent $ lift mainQuit >> return False
+          on win deleteEvent $ lift mainQuit >> return False
           widgetShowAll win
 
 -- end of buildSolve
 
 -- The other methods of solver are listed in alphabetical order:
 
-        -- | Used by 'addClauses' and 'addSpec'.
         addAxioms :: TermS -> String -> Action
         addAxioms t file = do
           sig <- getSignature
@@ -1155,6 +1153,8 @@ solver this solveRef enum paint = do
                   labGreen $ newCls "axioms" file
           else do enterFormulas cls
                   labRed $ "The clauses in " ++ tfield ++ " are not axioms."
+                  
+        -- used by addClauses and addSpec
 
         addCongAxioms :: Action
         addCongAxioms = do
@@ -1915,13 +1915,10 @@ solver this solveRef enum paint = do
                         writeIORef penposRef $ Just pt
                         canv `gtkSet` [ canvasCursor := Crosshair ]
         
-        -- | Changes the background of the canvas area.
-        changeCanvasBackground :: Color -> Action
-        changeCanvasBackground c@(RGB r g b) = do
-            let f n = fromIntegral $ n * 256
-                (r', g' , b') = (f r, f g, f b)
-            canv `gtkSet` [ canvasBackground := c ]
-            widgetModifyBg scrollCanv StateNormal $ gtkColor r' g' b'
+        changeCanvasBackground c@(RGB r g b) = do    -- Gtk only
+            gtkSet canv [canvasBackground := c]
+            widgetModifyBg scrollCanv StateNormal $ gtkColor (f r) (f g) (f b)
+            where f n = fromIntegral $ n * 256
         
         -- | Used by 'releaseSubtree' and 'replaceText''.
         changeMode :: TermS -> Action
@@ -2587,8 +2584,8 @@ solver this solveRef enum paint = do
             canv `gtkSet` [ canvasSize := size]
             if null treeposs then drawTree ct ct black blue []
             else drawTree2 ct ct black blue red darkGreen [] treeposs
-            -- when (notnull treeDir)
-            --     $ delay 100 $ saveGraphD' treeDir =<< readIORef picNoRef
+            -- when (notnull treeDir) $
+            --      readIORef picNoRef >>= delay 100 $ saveGraphD' treeDir
           where bds (n,w) (a,(x,y)) pss = (x-x',y-y'):(x+x',y+y'):concat pss
                                where (x',y') = (nodeWidth w a,n`div`2)
         
@@ -3332,28 +3329,19 @@ solver this solveRef enum paint = do
             else labMag "Enter either a predicate or a copredicate!"
             where (str1,str2) = ("copredicate","predicate")
         
-        -- | Shows @str@ in the left label ('lab') and set the label background
-        -- to blue. Exported by public 'Epaint.Solver' method 'Epaint.labBlue.
-        
-        labBlue :: String -> Action
-        labBlue str = labColor str blueback
-
-        -- | Shows @str@ in left label ('lab') and set the label background to
-        -- @col@. Used by 'labBlue, 'labColorToPaint', 'labGreen, 'labMag'
-        -- and  'labRed.
-        
         labColor :: String -> Background -> Action
-        labColor str col = do
-            lab `gtkSet` [ labelText := str ]
-            setBackground lab col
+        labColor str color = do gtkSet lab [labelText := str]
+                                setBackground lab color
         
-        -- | Used by 'checkBackward', 'narrowPar', 'narrowSubtree', 'setCurr',
-        -- 'setProof', 'simplifyPar' and 'simplifySubtree'.
-        
+        labBlue,labGreen,labMag,labRed :: String -> Action
+        labBlue  = flip labColor blueback
+        labGreen = flip labColor greenback
+        labMag   = flip labColor magback
+        labRed   = flip labColor redpulseback
+       
         labColorToPaint :: Background -> String -> Action
-        labColorToPaint col str = do
-            labColor str col
-            labSolver paint str
+        labColorToPaint col str = do labColor str col
+                                     labSolver paint str
         
         labColorToPaintT col str = do
             (time0,_) <-  readIORef timesRef
@@ -3362,22 +3350,6 @@ solver this solveRef enum paint = do
                     writeIORef timesRef (0,300)
                     labColor (str++'\n':show (mkSecs time0 time)++" sec") col
             labSolver paint str
-        
-        -- | Shows @str@ in the left label and set the label background to green.
-        -- Exported by public 'Epaint.Solver' method 'Epaint.labGreen.
-        labGreen :: String -> Action
-        labGreen = flip labColor greenback
-        
-        -- | Shows @str@ in the left label and set the label background to
-        -- magenta.
-        labMag :: String -> Action
-        labMag = flip labColor magback
-        
-        -- | Shows @str@ in the left label and set the label background to a
-        -- pulsating red.
-        -- Exported by public 'Epaint.Solver' method 'Epaint.labRed.
-        labRed :: String -> Action
-        labRed = flip labColor redpulseback
         
         -- | Lookup @file@ and load content into text area.
         -- Called by all menu items in "load text" submenu from tree menu and

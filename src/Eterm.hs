@@ -200,12 +200,12 @@ light, dark :: Color -> Color
 light   = nextLight 3 2
 dark    = nextLight 3 $ -1
 
-whiteback, blueback, greenback, magback, redback, redpulseback :: Background
-whiteback = Background "bg_white"
-blueback  = Background "bg_blue"
-greenback = Background "bg_green"
-magback   = Background "bg_magenta"
-redback   = Background "bg_red"
+whiteback,blueback,greenback,magback,redback,redpulseback :: Background
+whiteback    = Background "bg_white"
+blueback     = Background "bg_blue"
+greenback    = Background "bg_green"
+magback      = Background "bg_magenta"
+redback      = Background "bg_red"
 redpulseback = Background "bg_redpulse"
 
 -- STRING FUNCTIONS
