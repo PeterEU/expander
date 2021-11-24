@@ -355,9 +355,6 @@ painter pheight solveRef solve2Ref = do
     ref1 <- newIORef $ error "narrowButSignal not set"
     ref2 <- newIORef $ error "simplifyDSignal not set"
     ref3 <- newIORef $ error "simplifyBSignal not set"
-    let button1 = (but1,ref1)
-        button2 = (but2,ref2)
-        button3 = (but3,ref3)
     canv <- canvas
     scrollCanv <- getObject castToScrolledWindow "scrollCanv"
     combiBut <- getButton "combiBut"
@@ -562,21 +559,19 @@ painter pheight solveRef solve2Ref = do
           gtkSet stopBut [buttonLabel := "stop"]
           stopButSignal <- on stopBut buttonActivated $ interrupt True
           writeIORef stopButSignalRef stopButSignal
-          
-          let f (btn,signalRef) str act = do                -- Gtk needs signals
-                             gtkSet btn [buttonLabel := str]
-                             addContextClass btn defaultButton
-                             on btn buttonActivated act >>= writeIORef signalRef
           if checking then do
-             f button1 "<---" $ do proofBackward solve; showPicts solve
-             f button2 "--->" $ do proofForward solve; showPicts solve
-             f button3 "stop run" $ stopRun solve
+             mkSignal (but1,ref1) "<---" $ do
+                                            proofBackward solve; showPicts solve
+             mkSignal (but2,ref2) "--->" $ do 
+                                            proofForward solve; showPicts solve
+             mkSignal (but3,ref3) "stop run" $ stopRun solve
           else do
-             f button1 "narrow/rewrite" 
-                                  $ do remote; narrow solve; showPicts solve
-             f button2 "simplify" $ do remote; simplify solve; showPicts solve
-             f button3 "" done
-             when checking $ writeIORef isNewCheckRef False
+             mkSignal (but1,ref1) "narrow/rewrite" $ do
+                                         remote; narrow solve; showPicts solve
+             mkSignal (but2,ref2) "simplify" $ do
+                                         remote; simplify solve; showPicts solve
+             mkSignal (but3,ref3) "" done
+          when checking $ writeIORef isNewCheckRef False
           
           on combiBut buttonActivated combis
           on edgeBut buttonActivated switchConnect
@@ -646,7 +641,6 @@ painter pheight solveRef solve2Ref = do
                                     n <- eventButton
                                     lift $ releaseButton $ fromEnum n
                                     return False
-                                                
           on lab keyPressEvent $ do key <- eventKeyName
                                     lift $ case unpack key of "d" -> decouple
                                                               "p" -> mkPlanar
@@ -654,7 +648,6 @@ painter pheight solveRef solve2Ref = do
                                                               "u" -> unTurtle
                                                               _ -> done
                                     return False
-                                      
           on saveEnt keyPressEvent $ do 
                                  key <- eventKeyName
                                  lift $ case unpack key of "Up" -> addPict
@@ -662,8 +655,6 @@ painter pheight solveRef solve2Ref = do
                                                            "Right" -> removePict
                                                            _ -> done
                                  return False
-         
-          labGreen $ combi 0
           widgetShowAll win
           writeIORef isNewRef False
           windowIconify win
@@ -856,7 +847,7 @@ painter pheight solveRef solve2Ref = do
         drawWidget _            = done
         
         getDelay = do rv <- gtkGet delaySlider rangeValue
-        	      return $ truncate rv
+                      return $ truncate rv
 
         getNewCheck = readIORef isNewCheckRef
 
@@ -877,9 +868,8 @@ painter pheight solveRef solve2Ref = do
         labColor str color = do gtkSet lab [labelText := str]
                                 setBackground lab color
         
-        labGreen,labMag,labRed :: String -> Action
+        labGreen,labRed :: String -> Action
         labGreen = flip labColor greenback
-        labMag   = flip labColor magback
         labRed   = flip labColor redpulseback
         
         labSolver = writeIORef solverMsgRef
@@ -912,6 +902,11 @@ painter pheight solveRef solve2Ref = do
                       "The " ++ (if b then "selection" else "current graph") ++
                       " has been reduced to widgets that overlap in at most " ++
                       show maxmeet ++ " pixels."
+          
+        mkSignal (btn,signalRef) str act = do               -- Gtk needs signals
+                             gtkSet btn [buttonLabel := str]
+                             addContextClass btn defaultButton
+                             on btn buttonActivated act >>= writeIORef signalRef
         
         mkTurtle = do
             (pictures,edges,curr) <- currGraph
@@ -1381,9 +1376,9 @@ painter pheight solveRef solve2Ref = do
             solverMsg <- readIORef solverMsgRef
             labGreen $ str1 ++ add solverMsg ++ add msg
 
-        setButton 1 opts = opts button1
-        setButton 2 opts = opts button2
-        setButton 3 opts = opts button3
+        setButton 1 opts = opts (but1,ref1)
+        setButton 2 opts = opts (but2,ref2)
+        setButton 3 opts = opts (but3,ref3)
 
         setCurrGraph (pict,arcs) = do
             (pictures,edges,curr) <- currGraph
@@ -2099,7 +2094,7 @@ hulls edgy = f where
  f (Oval (p,a,c,i) rx ry) | a == 0 || rx == ry
                = [Path0 1 c i (filledS c) $ map (successor2 p rx ry) [0,5..360]]
  f x@(Path0 _ c i m ps)    = [if edgy || even m then x 
-                              else Path0 1 c i m $ spline ps]
+                                                else Path0 1 c i m $ spline ps]
  f (Slice (p,a,c,i) t r b) = if r <= 0 then [] 
                              else [Path0 1 c i (filledS c) $ 
                                    if t == Pie then p:g r++[p] else last qs:qs] 
