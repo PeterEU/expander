@@ -559,18 +559,21 @@ painter pheight solveRef solve2Ref = do
           gtkSet stopBut [buttonLabel := "stop"]
           stopButSignal <- on stopBut buttonActivated $ interrupt True
           writeIORef stopButSignalRef stopButSignal
-          if checking then do
-             mkSignal (but1,ref1) "<---" $ do
-                                            proofBackward solve; showPicts solve
-             mkSignal (but2,ref2) "--->" $ do 
-                                            proofForward solve; showPicts solve
-             mkSignal (but3,ref3) "stop run" $ stopRun solve
-          else do
-             mkSignal (but1,ref1) "narrow/rewrite" $ do
-                                         remote; narrow solve; showPicts solve
-             mkSignal (but2,ref2) "simplify" $ do
-                                         remote; simplify solve; showPicts solve
-             mkSignal (but3,ref3) "" done
+                    
+          let f (but,ref) str act = do               -- Gtk needs signals
+                                   gtkSet but [buttonLabel := str]
+                                   addContextClass but defaultButton
+                                   on but buttonActivated act >>= writeIORef ref
+          if checking then do f (but1,ref1) "<---" $ do proofBackward solve
+                                                        showPicts solve
+                              f (but2,ref2) "--->" $ do proofForward solve
+                                                        showPicts solve
+                              f (but3,ref3) "stop run" $ stopRun solve
+          else do f (but1,ref1) "narrow/rewrite" $ do remote; narrow solve
+                                                      showPicts solve
+                  f (but2,ref2) "simplify" $ do remote; simplify solve
+                                                showPicts solve
+                  f (but3,ref3) "" done
           when checking $ writeIORef isNewCheckRef False
           
           on combiBut buttonActivated combis
@@ -585,7 +588,7 @@ painter pheight solveRef solve2Ref = do
           on modeBut buttonActivated arrangeOrCopy
                                
           renewBut <- getButton "renewBut"
-          on renewBut buttonActivated $ readIORef solveRef >>= showPicts
+          on renewBut buttonActivated $ showPicts solve
             
           resetScaleBut <- getButton "resetScaleBut"
           on resetScaleBut buttonActivated resetScale
@@ -598,7 +601,7 @@ painter pheight solveRef solve2Ref = do
              
           undoBut <- getButton "undoBut"
           on undoBut buttonActivated undo
-          
+
           let setLeft act = do but <- eventButton
                                lift $ when (but == LeftButton) act
                                return False
@@ -851,18 +854,17 @@ painter pheight solveRef solve2Ref = do
 
         getNewCheck = readIORef isNewCheckRef
 
-        interrupt b = 
-            if b then do
-                scans <- readIORef scansRef
-                mapM_ stopScan scans
-                stopBut `gtkSet` [buttonLabel := "go"]
-                replaceCommandButton stopButSignalRef stopBut $ interrupt False
-            else do
-                delay <- getDelay
-                scans <- readIORef scansRef
-                mapM_ (`startScan` delay) scans 
-                stopBut `gtkSet` [buttonLabel := "stop"]
-                replaceCommandButton stopButSignalRef stopBut $ interrupt True
+        interrupt b = if b then do scans <- readIORef scansRef
+                                   mapM_ stopScan scans
+                                   stopBut `gtkSet` [buttonLabel := "go"]
+                                   replaceCommandButton stopButSignalRef stopBut
+                                                      $ interrupt False
+                           else do delay <- getDelay
+                                   scans <- readIORef scansRef
+                                   mapM_ (`startScan` delay) scans 
+                                   gtkSet stopBut [buttonLabel := "stop"]
+                                   replaceCommandButton stopButSignalRef stopBut
+                                                      $ interrupt True
         
         labColor :: String -> Background -> Action
         labColor str color = do gtkSet lab [labelText := str]
@@ -902,11 +904,6 @@ painter pheight solveRef solve2Ref = do
                       "The " ++ (if b then "selection" else "current graph") ++
                       " has been reduced to widgets that overlap in at most " ++
                       show maxmeet ++ " pixels."
-          
-        mkSignal (btn,signalRef) str act = do               -- Gtk needs signals
-                             gtkSet btn [buttonLabel := str]
-                             addContextClass btn defaultButton
-                             on btn buttonActivated act >>= writeIORef signalRef
         
         mkTurtle = do
             (pictures,edges,curr) <- currGraph
@@ -1008,8 +1005,8 @@ painter pheight solveRef solve2Ref = do
             windowDeiconify win; windowPresent win
             bgcolor <- readIORef bgcolorRef; changeCanvasBackground bgcolor
             gtkSet stopBut [buttonLabel := "stop"]
-            subtrees <- readIORef subtreesRef
             replaceCommandButton stopButSignalRef stopBut $ interrupt True
+            subtrees <- readIORef subtreesRef
             noOfGraphs <- readIORef noOfGraphsRef
             rangeSetRange pictSlider 0 $ fromIntegral $ noOfGraphs-1
             (pictures,edges,curr) <- currGraph
@@ -4317,7 +4314,7 @@ widgString = concat [do symbol "Arc"; state <- state
          turtAct = concat [symbol "Close" >> return Close,
                            symbol "Draw"  >> return Draw,
                            symbol "Jump"  >> enclosed real >>= return . Jump,
-                           symbol "JumpA" >> enclosed real >>=  return . JumpA,
+                           symbol "JumpA" >> enclosed real >>= return . JumpA,
                            symbol "Move"  >> enclosed real >>= return . Move,
                            symbol "MoveA" >> enclosed real >>= return . MoveA,
                            symbol "Open"  >> enclosed nat >>= return . Open,
