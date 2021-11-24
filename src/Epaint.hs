@@ -1338,7 +1338,7 @@ painter pheight solveRef solve2Ref = do
             canv `gtkSet` [canvasSize := size]
             arrangeMode <- readIORef arrangeModeRef
             treeNumbers <- readIORef treeNumbersRef
-            let pict2 = map (transXY (5,5)) pict2
+            let pict2 = map (transXY (5,5)) pict1
                 f = filter propNode
                 pict3 = f pict2
                 ws = if just rect then f $ map (pict3!!) is else pict3
