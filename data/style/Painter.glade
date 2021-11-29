@@ -19,7 +19,7 @@
   <object class="GtkAdjustment" id="pictSliderRange">
     <property name="upper">1</property>
     <property name="step_increment">1</property>
-    <property name="page_increment">10</property>
+    <property name="page_increment">1</property>
   </object>
   <object class="GtkAdjustment" id="scaleSliderRange">
     <property name="lower">-9</property>
@@ -76,7 +76,7 @@
         <child>
           <object class="GtkScale" id="pictSlider">
             <property name="visible">True</property>
-            <property name="sensitive">False</property>
+            <property name="sensitive">True</property>
             <property name="can_focus">True</property>
             <property name="adjustment">pictSliderRange</property>
             <property name="round_digits">1</property>
