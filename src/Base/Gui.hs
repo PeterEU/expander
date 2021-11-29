@@ -78,7 +78,6 @@ module Base.Gui
   , MenuOpt(..)
   , menuOpt
   , cascade
-  , smooth'
   ) where
 
 import Prelude ()
@@ -128,15 +127,13 @@ pixbufRemoveAlpha (RGB r g b) pixbuf = do
         let start = start' + nChannels - 1
             end = end' - 1
         mapM_ (setByteMax pixels) [start,start+nChannels .. end]
-    return ()
-    where
-        setByteMax arr i = do
-          alpha <- Haskell.readArray arr i
-          when (alpha == 0) $ do
-            Haskell.writeArray arr (i-3) (fromIntegral r)
-            Haskell.writeArray arr (i-2) (fromIntegral g)
-            Haskell.writeArray arr (i-1) (fromIntegral b)
-            Haskell.writeArray arr i maxBound
+    done
+    where setByteMax arr i = do alpha <- Haskell.readArray arr i
+                                when (alpha == 0) $ do
+                                   Haskell.writeArray arr (i-3) $ fromIntegral r
+                                   Haskell.writeArray arr (i-2) $ fromIntegral g
+                                   Haskell.writeArray arr (i-1) $ fromIntegral b
+                                   Haskell.writeArray arr i maxBound
             
 type Pos   = (Int,Int)
 type Point = (Double,Double)
@@ -181,20 +178,25 @@ canvasCursor = writeNamedAttr "cursor" canvasSetCursor
 
 -- SMOOTHING
 
--- interpolate' computes multiple auxiliary positions for beziere curves from a
+smooth,interpolate :: Path -> Path
+smooth ps = interpolate $!! clean $!! spline ps where
+            clean (p:ps) = p:dropWhile (== p) ps
+            clean [] = []
+            spline ps@(p:_:_:_) = if p == last ps then spline0 True $!! init ps
+                                                  else spline0 False ps
+            spline ps = ps
+            
+-- used by line,canvasPolygon
+
+-- interpolate computes multiple auxiliary positions for beziere curves from a
 -- straight line path.
 
-smooth',interpolate',spline' :: Path -> Path
-smooth' ps = interpolate' $!! clean $!! spline' ps
-             where clean (p':ps') = p' : dropWhile (==p') ps'
-                   clean [] = []
-interpolate' pss@(p1:p2:_:_) = p1:q1:interpolate0 pss
+interpolate pss@(p1:p2:_:_) = p1:q1:interpolate0 pss
     where scl = 0.35 -- scaling factor
           !closed = p1 == last pss
           p0 = last $!! init pss
-          mag (x,y) = let !r1 = (x ** 2)
-                          !r2 = (y ** 2)
-                      in sqrt $! (r1 + r2)
+          mag (x,y) = sqrt $! (r1+r2) where !r1 = (x ** 2)
+                                            !r2 = (y ** 2)
           skalar s (x,y) = let !r1 = s*x
                                !r2 = s*y
                            in (r1, r2)
@@ -218,16 +220,13 @@ interpolate' pss@(p1:p2:_:_) = p1:q1:interpolate0 pss
              q0' = if closed then csub p1' $!! 
                                       skalar (scl * mag (csub p1' p0')) tangent'
                              else csub p1' $ skalar scl tangent'
-          interpolate0 _ = error $ "Gui.interpolate: interpolate' should never "
-                                   ++ "be called with list of length < 2."
-interpolate' pss = pss                         
-spline' ps@(p:_:_:_) = if p == last ps then spline0' True $!! init ps
-                                       else spline0' False ps
-spline' ps           = ps
+          interpolate0 _ = error $ "Gui.interpolate: interpolate should never "
+                                ++ "be called with list of length < 2."
+interpolate pss = pss                         
 
-spline0' :: Bool -> Path -> Path
-spline0' isClosed ps = first:map f [1..resolution] ++ map g [1..9] ++
-                       [if isClosed then first else ps!!(n-1)]
+spline0 :: Bool -> Path -> Path
+spline0 isClosed ps = first:map f [1..resolution] ++ map g [1..9] ++
+                      [if isClosed then first else ps!!(n-1)]
         where add2 (x,y) (a,b) = let !r1 = a+x
                                      !r2 = b+y
                                  in (r1,r2)
@@ -269,15 +268,12 @@ canvas = do
     surfaceRef <- newIORef undefined
     sizeRef <- newIORef (0, 0)
     backgroundRef <- newIORef $ RGB 0 0 0
-    
     surface0 <- createImageSurface FormatRGB24 1 1
     writeIORef surfaceRef surface0
     drawingArea <- drawingAreaNew
-    _ <- drawingArea `on` draw $ do
-        surface <- liftIO $ readIORef surfaceRef
-        setSourceSurface surface 0 0
-        paint
-    
+    on drawingArea draw $ do surface <- liftIO $ readIORef surfaceRef
+                             setSourceSurface surface 0 0
+                             paint
     return $ let
         calcVertexes :: Pos -> Pos -> (Point,Point)
         calcVertexes tip end = ((x1, y1), (x2, y2))
@@ -376,11 +372,11 @@ canvas = do
         curve _ = return () 
         
         line :: [Pos] -> LineOpt -> Action
-        line [] _ = return ()
+        line [] _ = done
         line pss opt@LineOpt {lineArrow = at, lineSmooth = isSmooth} = do
             surface <- readIORef surfaceRef
             let dpss = map fromInt2 pss
-                ((x, y):ps) = if isSmooth then smooth' dpss else dpss
+                ((x, y):ps) = if isSmooth then smooth dpss else dpss
             renderWith surface $ do
                 save
                 setLineOpt opt
@@ -395,11 +391,11 @@ canvas = do
         canvasPolygon :: [Pos] -> PolygonOpt -> Action
         canvasPolygon [] _ = error "Gui.canvasPolygon: empty list."
         canvasPolygon pss
-                opt@PolygonOpt{ polygonFill = c, polygonAntialias = aa
-                              , polygonSmooth = isSmooth } = do
+                opt@PolygonOpt {polygonFill = c, polygonAntialias = aa,
+                                polygonSmooth = isSmooth} = do
             surface <- readIORef surfaceRef
             let dpss = map fromInt2 pss
-                ((x, y):ps) = if isSmooth then smooth' dpss else dpss
+                ((x,y):ps) = if isSmooth then smooth dpss else dpss
             renderWith surface $ do
                 save
                 setAntialias $ if aa then AntialiasDefault else AntialiasNone
@@ -508,40 +504,35 @@ canvas = do
           width <- imageSurfaceGetWidth surface
           height <- imageSurfaceGetHeight surface
           -- workaround for gif
-          if format == "gif"
-            then do let tmpfile = file -<.> "png"
-                    _ <- canvasSave tmpfile
-                    eitherimg <- Picture.readImage tmpfile
-                    either (const $ putStrLn "gif failed") id $ 
-                           do img <- eitherimg
-                              Picture.saveGifImage file img
-                    exist <- doesFileExist tmpfile
-                    when exist $ removeFile tmpfile        
+          if format == "gif" then do let tmpfile = file -<.> "png"
+                                     canvasSave tmpfile
+                                     eitherimg <- Picture.readImage tmpfile
+                                     either (const $ putStrLn "gif failed") id $ 
+                                                do img <- eitherimg
+                                                   Picture.saveGifImage file img
+                                     exist <- doesFileExist tmpfile
+                                     when exist $ removeFile tmpfile        
           -- vector
-          else if format `elem` ["ps", "pdf", "svg"]
-            then do
-              let withSurface = case format of
-                    "pdf" -> withPDFSurface
-                    "ps"  -> withPSSurface
-                    "svg" -> withSVGSurface
-                    _ -> error $ "Gui.Canvas.canvasSave: Vector format "
-                            ++ format ++ " should never happen."
-              withSurface file (fromIntegral width) (fromIntegral height)
-                $ \image -> renderWith image $ do
-                  setSourceSurface surface 0 0
-                  paint
+          else if format `elem` words "ps pdf svg"
+            then do let withSurface = case format of
+                            "pdf" -> withPDFSurface
+                            "ps"  -> withPSSurface
+                            "svg" -> withSVGSurface
+                            _ -> error $ "Gui.Canvas.canvasSave: Vector format "
+                                         ++ format ++ " should never happen."
+                    withSurface file (fromIntegral width) (fromIntegral height)
+                                $ \image -> renderWith image $ do
+                                                    setSourceSurface surface 0 0
+                                                    paint
           -- pixel
           else if formattext `elem` pixbufGetFormats
-            then do
-              pbuf <- pixbufNewFromSurface surface 0 0 width height
-              pixbufSave pbuf file formattext ([] :: [(String,String)])
-            else putStrLn "format not supported"
+               then do pbuf <- pixbufNewFromSurface surface 0 0 width height
+                       pixbufSave pbuf file formattext ([] :: [(String,String)])
+               else putStrLn "format not supported"
           return file
-          where
-            dups "jpg" = "jpeg"
-            dups "eps" = "ps"
-            dups name  = name
-            
+          where dups "jpg" = "jpeg"
+                dups "eps" = "ps"
+                dups name  = name
         
         canvasSetSize size@(width, height) = do
             writeIORef sizeRef size
@@ -784,19 +775,16 @@ imageOpt = ImageOpt 0.0 1.0 C
 -- data MenuOpt        > WindowOpt, Enabled
 -- data MButtonOpt     > StdOpt, FontOpt, PadOpt, Img, Btmp, Underline, 
 
--- Unparser
-
 instance Show ArcStyleType where show Pie       = "pieslice"
                                  show Chord     = "chord"
                                  show Perimeter = "arc"
 
-
 instance Show Color where 
-   showsPrec _ (RGB r g b) rest = "#" ++ concatMap (hex 2 "") [r,g,b] ++ rest
-                    where hex :: Int -> [Char] -> Int -> [Char]
-                          hex 0 rs _ = rs
-                          hex t rs 0 = hex (t-1) ('0':rs) 0
-                          hex t rs i = hex (t-1)(chr (48+m+7*div m 10):rs) d
+      showsPrec _ (RGB r g b) rest = "#" ++ concatMap (hex 2 "") [r,g,b] ++ rest
+                        where hex :: Int -> [Char] -> Int -> [Char]
+                              hex 0 rs _ = rs
+                              hex t rs 0 = hex (t-1) ('0':rs) 0
+                              hex t rs i = hex (t-1)(chr (48+m+7*div m 10):rs) d
                                        where m = mod i 16; d = div i 16
 
 -- TODO What is the String for?
@@ -813,19 +801,16 @@ data Runnable = Runnable {runnableStart :: Action, runnableStop :: Action}
 periodic :: Int -> Cmd () -> Request Runnable
 periodic millisecs act = do
     handlerID <- newIORef Nothing -- Nothing == not running
-    
-    return Runnable
-        { runnableStart = do
-            maybeID <- readIORef handlerID
-            when (Haskell.isNothing maybeID) $ do -- if not running
-                hID <- timeoutAdd (act >> return True) millisecs
-                writeIORef handlerID $ Just hID
-        , runnableStop  = do
-            maybeID <- readIORef handlerID
-            when (Haskell.isJust maybeID) $ do -- if running
-                timeoutRemove $Haskell.fromJust maybeID
-                writeIORef handlerID Nothing
-        }
+    return Runnable {runnableStart = do
+                         maybeID <- readIORef handlerID
+                         when (Haskell.isNothing maybeID) $ do -- if not running
+                              hID <- timeoutAdd (act >> return True) millisecs
+                              writeIORef handlerID $ Just hID,
+                     runnableStop  = do
+                         maybeID <- readIORef handlerID
+                         when (Haskell.isJust maybeID) $ do -- if running
+                              timeoutRemove $Haskell.fromJust maybeID
+                              writeIORef handlerID Nothing}
 
 data MenuOpt = MenuOpt {menuFont :: Maybe String,
                         menuBackground :: Maybe Background}
@@ -836,14 +821,13 @@ menuOpt = MenuOpt {menuFont = Nothing, menuBackground = Nothing}
 -- Tk.Menu.cascade
 
 cascade :: Menu -> String -> MenuOpt -> Request Menu
-cascade menu label MenuOpt{ menuFont = mFont, menuBackground = bg } = do
-  item <- menuItemNewWithLabel label
-  menuShellAppend menu item
-  doMaybe (addContextClass item) mFont
-  doMaybe (setBackground item) bg
-  subMenu <- menuNew
-  item `Gtk.set` [ menuItemSubmenu := subMenu, widgetVisible := True ]
-  return subMenu
-  where
-    doMaybe act (Just v) = act v
-    doMaybe _ Nothing    = return ()
+cascade menu label MenuOpt {menuFont = mFont, menuBackground = bg} = do
+                item <- menuItemNewWithLabel label
+                menuShellAppend menu item
+                doMaybe (addContextClass item) mFont
+                doMaybe (setBackground item) bg
+                subMenu <- menuNew
+                Gtk.set item [menuItemSubmenu := subMenu, widgetVisible := True]
+                return subMenu
+                where doMaybe act (Just v) = act v
+                      doMaybe _ Nothing    = done
