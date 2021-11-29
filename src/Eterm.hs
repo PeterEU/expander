@@ -180,15 +180,10 @@ hue _ col _ _ = col
 nextColor :: Int -> Int -> Color -> Color
 nextColor mode n col  = hue mode col n 1
 
-{- |
-    @nextLight n i c@ adds i/n units of white (if @i@ is positive) resp. black
+{-  @nextLight n i c@ adds i/n units of white (if @i@ is positive) resp. black
     (if @i@ is negative) pigment to c. If @i = n@ resp. @i = -n@, then @c@ turns
-    white resp. black.
--}
-nextLight :: Int -- type of n
-    -> Int -- type of i
-    -> Color -- type of c
-    -> Color
+    white resp. black. -}
+nextLight :: Int -> Int -> Color -> Color
 nextLight n i (RGB x y z) = RGB (f x) (f y) (f z)
              where f x | i > 0 = x+i*(255-x)`div`n -- i=n  --> f x = 255 (white)
                        | True  = x+i*x`div`n       -- i=-n --> f x = 0   (black)
