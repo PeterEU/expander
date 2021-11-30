@@ -625,7 +625,6 @@ solver this solveRef enum paint = do
     checkerRef <- newIORef $ error "checkerRef undefined"
     deriveBut <- getButton "deriveBut"
     treeSlider <- getScale "treeSlider"
-    gtkSet treeSlider [widgetSensitive := True]
     ent <- getObject castToEntry "ent"
     fontSize <- getScale "fontSize"
     fastBut <- getButton "fastBut"
@@ -1883,7 +1882,7 @@ solver this solveRef enum paint = do
                     writeIORef treesRef [t]
                     modifyIORef counterRef $ \counter -> upd counter 't' 1
                     writeIORef currRef 0
-                    -- gtkSet treeSlider [widgetSensitive := True]
+                    gtkSet treeSlider [widgetSensitive := False]
                     setCurrInPaint paint 0
                     gtkSet termBut [labelText := str]
                     setNarrow 0
@@ -5064,8 +5063,8 @@ solver this solveRef enum paint = do
                 str = case treeMode of "tree" -> formString formula
                                        _ -> show lg ++ ' ':treeMode ++ "s"
             rangeSetRange treeSlider 0 $ fromIntegral (lg-1)
-            gtkSet treeSlider [rangeValue := fromIntegral curr]
-                               -- widgetSensitive := True]
+            gtkSet treeSlider [rangeValue := fromIntegral curr,
+                               widgetSensitive := True]
             setCurrInPaint paint curr
             gtkSet termBut [labelText := str]
             setTreeposs $ Replace ps
