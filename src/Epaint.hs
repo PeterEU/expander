@@ -358,7 +358,6 @@ painter pheight solveRef solve2Ref = do
     lab <- getLabel "lab"
     modeEnt <- getObject castToEntry "modeEnt"
     pictSlider <- getScale "pictSlider"
-    gtkSet pictSlider [widgetSensitive := True]
     saveEnt <- getObject castToEntry "saveEnt"
     saveDBut <- getButton "saveDBut"
     spaceEnt <- getObject castToEntry "spaceEnt"
@@ -528,7 +527,7 @@ painter pheight solveRef solve2Ref = do
                           writeIORef edgesRef [arcs]
                           writeIORef noOfGraphsRef 1
                           writeIORef currRef 0
-                          gtkSet pictSlider [rangeValue := 0]
+                          gtkSet pictSlider [widgetSensitive := False]
                           arrangeButton mode graph
         
         buildPaint checking = do
@@ -1006,8 +1005,8 @@ painter pheight solveRef solve2Ref = do
             noOfGraphs <- readIORef noOfGraphsRef
             rangeSetRange pictSlider 0 $ fromIntegral $ noOfGraphs-1
             (pictures,edges,curr) <- currGraph
-            gtkSet pictSlider [rangeValue := fromIntegral curr]
-                              -- widgetSensitive := True]
+            gtkSet pictSlider [rangeValue := fromIntegral curr,
+                               widgetSensitive := True]
             writeIORef rectRef Nothing
             writeIORef rectIndicesRef []
             writeIORef changedWidgetsRef nil2
