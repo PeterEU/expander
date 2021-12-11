@@ -1,4 +1,5 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+
 {-
 Module      : Eterm (update from November 15, 2021)
 Copyright   : (c) Peter Padawitz and Jos Kusiek, 2021
@@ -109,12 +110,6 @@ sub2 (x,y) (a,b) = (a-x,b-y)
 apply2 :: (a -> b) -> (a,a) -> (b,b)
 apply2 f (x,y) = (f x,f y)
 
-fromInt :: Int -> Double
-fromInt = fromIntegral
-
-fromInt2 :: (Int, Int) -> (Double, Double)
-fromInt2 (x,y) = (fromInt x,fromInt y)
-
 round2 :: (RealFrac b, Integral d, RealFrac a, Integral c) => (a,b) -> (c,d)
 round2 (x,y) = (round x,round y)
 
@@ -168,7 +163,7 @@ isHue (RGB r g b) = all (`elem` [0..255]) [r,g,b] &&
 
 hue :: Int -> Color -> Int -> Int -> Color
 hue 0 col n i = iterate nextCol col!!(i*1530`div`n)
-                                  -- round (fromInt i*1530/fromInt n)
+                                  -- round $ fromInt i*1530/fromInt n
 hue 1 col n i | i > 0 = if odd i then complColor $ hue 1 col n $ i-1
                                  else nextColor 0 (n`div`2) $ hue 1 col n $ i-2
 hue 2 col n i = if odd i then complColor d else d where d = hue 0 col n i
@@ -303,7 +298,6 @@ domain f s s' = [x | x <- s, f x `elem` s']
 
 context :: Int -> [a] -> [a]
 context i s = take i s++drop (i+1) s
-
 
 indices_ :: [a] -> [Int]
 indices_ s = [0..length s-1]
@@ -5482,7 +5476,7 @@ sizes0 = (6,const 0)
 -- mkSizes font xs takes a font and a list xs of strings and returns the actual
 -- font size and a function that maps each string of xs to its width. 
 
-mkSizes :: Canvas -> FontDescription -> [String] -> Request Sizes
+mkSizes :: Canvas -> FontDescription -> [String] -> IO Sizes
 mkSizes canv font xs = do
     widths <- mapM (getTextWidth canv font . delQuotes) xs
     let f x = case lookup x $ zip xs widths of
@@ -5490,15 +5484,15 @@ mkSizes canv font xs = do
                    _ -> 1
         g x = if x `elem` xs then f x
                              else maximum $ 1:[f y | y <- xs, lg x == lg y]
-    size <- Haskell.fromMaybe 0 <$> fontDescriptionGetSize font
-    return (h size, truncate . g)
-                  where lg = length . delQuotes
-                        h n | n < 7  = 6
-                            | n < 8  = 7
-                            | n < 10 = 8
-                            | n < 13 = 10
-                            | n < 16 = 13
-                            | True   = 16
+    size <- fontDescriptionGetSize font
+    return (h $ Haskell.fromMaybe 0 size, truncate . g)
+    where lg = length . delQuotes
+          h n | n < 7  = 6
+              | n < 8  = 7
+              | n < 10 = 8
+              | n < 13 = 10
+              | n < 16 = 13
+              | True   = 16
 
 -- used by Epaint and Ecom
 
