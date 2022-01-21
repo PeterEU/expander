@@ -5,7 +5,7 @@ module Base.Gui
   , module Graphics.UI.Gtk
   , module Graphics.UI.Gtk.Gdk.PixbufAnimation
   , module System.Glib.GDateTime
-  , Pos, Point
+  , Pos, Point, Path
   , addContextClass
   , cascade
   , fromInt, fromInt2
@@ -123,7 +123,7 @@ data Canvas = Canvas
     , canvasArc            :: Point -> Double -> Point -> ArcOpt -> IO ()
     , canvasRectangle      :: Pos -> Pos -> OvalOpt -> IO ()
     , line                 :: [Pos] -> LineOpt -> IO ()
-    , canvasPolygon        :: [Pos] -> PolygonOpt -> IO ()
+    , polygon              :: [Pos] -> PolygonOpt -> IO ()
     , canvasText           :: Pos -> TextOpt -> String -> IO ()
     , canvasImage          :: Pos -> ImageOpt -> Image -> IO ()
   --, cwindow              :: Pos -> [CWindowOpt] -> IO CWindow
@@ -153,51 +153,18 @@ canvasCursor = writeNamedAttr "cursor" canvasSetCursor
 
 -- SMOOTHING
 
-csub = calc (-)
-cadd = calc (+)
-calc op (x1,y1) (x2,y2) = (r1,r2) where !r1 = op x1 x2; !r2 = op y1 y2
+smooth,spline :: Path -> Path
 
-norm x = scalar (1/mag x) x
-mag (x,y) = sqrt $! (r1+r2) where !r1 = x*x; !r2 = y*y
-scalar s (x,y) = (r1,r2)    where !r1 = s*x; !r2 = s*y
+smooth ps = spline $!! spline ps 
 
-clean :: Eq a => [a] -> [a]
-clean (x:s) = x:dropWhile (== x) s
-clean _     = []
-
-smooth,interpolate,spline :: Path -> Path
-
-smooth ps = interpolate $!! spline ps 
-            
--- used by line,canvasPolygon
-
--- interpolate computes additional control points of B-splines ???
-
-interpolate ps@(p1:p2:_:_) = p1:q1:f ps
-    where scl = 0.35                                    -- scaling factor
-          !closed = p1 == last ps
-          p0 = last $!! init ps
-          q1 = if closed then cadd p1 $ scalar (scl * mag (csub p2 p1)) 
-                                      $ norm $!! csub p2 p0
-                         else cadd p1 $ scalar scl $ csub p2 p1
-          f (p0:p1:p2:ps) = q0:p1:q1:f(p1:p2:ps) where
-                        q0 = csub p1 $!! scalar (scl * mag (csub p1 p0)) tangent
-                        q1 = cadd p1 $!! scalar (scl * mag (csub p2 p1)) tangent
-                        tangent = norm $!! csub p2 p0
-          f [p0,p1] = [q0,p1] where
-                 q0 = if closed then csub p1 $!! scalar (scl * mag (csub p1 p0))
-                                             $ norm $!! csub p2 p0
-                                else csub p1 $ scalar scl $ csub p1 p0
-          f _ = error "Gui.interpolate applied to [] or singleton"
-interpolate pss = pss 
-
--- used by smooth
+-- used by line,polygon
 
 -- spline ps builds a B-spline with degree 3 with control points ps. 
 
 spline ps@(p:_:_:_) = 
-    clean $!! if p == last ps then spl True $!! init ps else spl False ps
-    where spl isClosed ps = first:map f [1..resolution] ++ map g [1..9] ++
+    if p == last ps then spl True $!! init ps else spl False ps
+    where cadd (x1,y1) (x2,y2) = (r1,r2) where !r1 = x1+x2; !r2 = y1+y2
+          spl isClosed ps = first:map f [1..resolution] ++ map g [1..9] ++
                             [if isClosed then first else ps!!(n-1)] where
               first = f 0; !n = length ps; !resolution = n*6
               upb = m - if isClosed then 1 else 3 where !m = fromInt n
@@ -227,7 +194,7 @@ spline ps@(p:_:_:_) =
                                    sum1 = if p i then num1/denom1 else 0
                                    sum2 = if p $ i+1 then num2/denom2 else 0
 spline ps = ps
-   
+
 -- used by smooth and Epaint > hulls,splinePict
                                 
 calcVertexes :: Pos -> Pos -> (Point,Point)
@@ -359,40 +326,40 @@ canvas = do
         
         line :: [Pos] -> LineOpt -> IO ()
         line [] _ = done
-        line pss opt@LineOpt {lineArrow = at, lineSmooth = isSmooth} = do
+        line ps opt@LineOpt {lineArrow = at, lineSmooth = isSmooth} = do
             surface <- readIORef surfaceRef
-            let dpss = map fromInt2 pss
-                ((x,y):ps) = if isSmooth then smooth dpss else dpss
-            renderWith surface $ do save
-                                    setLineOpt opt
-                                    moveTo x y
-                                    if isSmooth then curve ps
-                                                else mapM_ (uncurry lineTo) ps
-                                    stroke
-                                    arrow at pss
-                                    restore
+            let dps = map fromInt2 ps
+                ((x,y):qs) = if isSmooth then smooth dps else dps
+            renderWith surface $ do 
+                        save
+                        setLineOpt opt
+                        moveTo x y
+                        if isSmooth then curve qs else mapM_ (uncurry lineTo) qs
+                        stroke
+                        arrow at ps
+                        restore
             widgetQueueDraw drawingArea
         
-        canvasPolygon :: [Pos] -> PolygonOpt -> IO ()
-        canvasPolygon [] _ = error "Gui.canvasPolygon: empty list."
-        canvasPolygon pss opt@PolygonOpt {polygonFill = c, 
-                                          polygonAntialias = aa,
-                                          polygonSmooth = isSmooth} = do
+        polygon :: [Pos] -> PolygonOpt -> IO ()
+        polygon [] _ = error "Gui.polygon: empty list."
+        polygon ps opt@PolygonOpt {polygonFill = c, 
+                                   polygonAntialias = aa,
+                                   polygonSmooth = isSmooth} = do
             surface <- readIORef surfaceRef
-            let dpss = map fromInt2 pss
-                ((x,y):ps) = if isSmooth then smooth dpss else dpss
+            let dps = map fromInt2 ps
+                ((x,y):qs) = if isSmooth then smooth dps else dps
             renderWith surface $ do
-                save
-                setAntialias $ if aa then AntialiasDefault else AntialiasNone
-                setLineWidth $ polygonWidth opt
-                moveTo x y
-                if isSmooth then curve ps else mapM_ (uncurry lineTo) ps
-                closePath
-                when (Haskell.isJust c) $ do setColor $ Haskell.fromJust c
-                                             fillPreserve
-                setColor $ polygonOutline opt
-                stroke
-                restore
+                   save
+                   setAntialias $ if aa then AntialiasDefault else AntialiasNone
+                   setLineWidth $ polygonWidth opt
+                   moveTo x y
+                   if isSmooth then curve qs else mapM_ (uncurry lineTo) qs
+                   closePath
+                   when (Haskell.isJust c) $ do setColor $ Haskell.fromJust c
+                                                fillPreserve
+                   setColor $ polygonOutline opt
+                   stroke
+                   restore
             widgetQueueDraw drawingArea
         
         canvasRectangle :: Pos -> Pos -> OvalOpt -> IO ()
@@ -513,7 +480,7 @@ canvas = do
       in Canvas {canvasOval          = canvasOval,
                  canvasArc           = canvasArc,
                  line                = line,
-                 canvasPolygon       = canvasPolygon,
+                 polygon             = polygon,
                  canvasRectangle     = canvasRectangle,
                  canvasText          = canvasText,
                  canvasImage         = canvasImage,
