@@ -5564,13 +5564,10 @@ transLeaves w hor ts t = loop hor
 -- shrinkTree y ver t shrinks t vertically such that ver becomes the distance
 -- between a node and its direct sucessors. y is the y-coordinate of the root.
 
-shrinkTree :: Num a => a -- type of y
-                    -> a -- type of ver
-                    -> Term (b, (c, d)) -- type of t
-                    -> Term (b, (c, a))
-shrinkTree y _ver (V (a,(x,_)))    = V (a,(x,y))
-shrinkTree y ver (F (a,(x,_)) cts) = F (a,(x,y)) $
-                                       map (shrinkTree (y+ver) ver) cts
+shrinkTree :: Num a => a -> a -> Term (b,(c,d)) -> Term (b,(c,a))
+shrinkTree y _ (V (a,(x,_)))       = V (a,(x,y))
+shrinkTree y ver (F (a,(x,_)) cts) = F (a,(x,y)) $ map (shrinkTree (y+ver) ver) 
+                                                       cts
 
 -- cTree t ct replaces the node entries of t by the coordinates of ct.
 

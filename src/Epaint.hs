@@ -73,6 +73,7 @@ data Solver = Solver
     , setInterpreterR :: String -> IO ()
     , setNewTreesR    :: [TermS] -> String -> IO ()
     , setSubst        :: (String -> TermS,[String]) -> IO ()
+    , setTermToPictR  :: String -> IO ()
     , showPicts       :: IO ()
     , simplify        :: IO ()
     , stopRun         :: IO () }
@@ -201,9 +202,9 @@ scanner act = do
 -- PAINTER types
 
 type Point3  = (Double,Double,Double)
+type Point4  = (Double,Double,Double,Double)
 type Line_   = (Point,Point)
 type Lines   = [Line_]
-type Path    = [Point]
 type State   = (Point,Double,Color,Int) -- (center,orientation,hue,lightness)
 type Graph   = (Picture,Arcs)
 type Picture = [Widget_]
@@ -815,9 +816,9 @@ painter pheight solveRef solve2Ref = do
                                      polygonFill = Just $ fillColor c i bgcolor}
                 optsP _ = (optsP 2) {polygonSmooth = True}
             if m < 2 then act (line canv) $ optsL m
-                     else act (canvasPolygon canv) $ optsP m
-            where act f opts = mapM_ (flip f opts . map round2) $ splitPath ps
-                            -- do flip f opts $ map round2 ps; done
+                     else act (polygon canv) $ optsP m
+            where act f opts = --mapM_ (flip f opts . map round2) $ splitPath ps
+                               flip f opts $ map round2 ps
         drawWidget (Repeat w) = drawWidget w
         drawWidget Skip       = done
         drawWidget (Slice ((x,y),a,c,i) t r b) = do
@@ -1576,7 +1577,7 @@ textWidget c (height,width) x = Text_ (st0 c) height strs $ map width strs
                                       g '\'' = ' '; g c = c
                                       h '\"' = ' '; h c = c
 
-inRect :: (Double,Double) -> Widget_ -> Bool
+inRect :: Point -> Widget_ -> Bool
 (x',y') `inRect` Rect ((x,y),_,_,_) b h = x-b <= x' && x' <= x+b &&
                                           y-h <= y' && y' <= y+h
  
@@ -1698,7 +1699,7 @@ atan2' :: RealFloat a => a -> a -> a
 atan2' 0 0 = atan2 0 1
 atan2' x y = atan2 x y
 
-slope :: (Double, Double) -> (Double, Double) -> Double
+slope :: Point -> Point -> Double
 slope (x1,y1) (x2,y2) = if x1 == x2 then fromInt maxBound else (y2-y1)/(x2-x1) 
 
 -- successor moves on a circle.
@@ -2162,7 +2163,7 @@ concatJust s = maybeT $ do s <- mapM runT s
                            return $ do guard $ any just s
                                        Just $ concat [as | Just as <- s]
 
-type Interpreter = Sizes -> Pos -> TermS -> MaybeT IO Picture
+type Interpreter = Pos -> Sizes -> TermS -> MaybeT IO Picture
 
 -- The following functions to MaybeT(IO)(Picture) are used by 
 -- Ecom > getInterpreter.
@@ -2171,8 +2172,8 @@ type Interpreter = Sizes -> Pos -> TermS -> MaybeT IO Picture
 -- interpretable by eval and combines the resulting pictures into a single one.
 
 searchPic :: Interpreter -> Interpreter
-searchPic eval sizes spread t = g [] t where
-       g p t = maybeT $ do pict <- runT (eval sizes spread t)
+searchPic eval spread sizes t = g [] t where
+       g p t = maybeT $ do pict <- runT (eval spread sizes t)
                            if just pict then return pict
                            else case t of F _ ts -> runT $ h ts
                                           _ -> return Nothing
@@ -2183,15 +2184,15 @@ searchPic eval sizes spread t = g [] t where
 -- interpretable by eval and combines the resulting pictures into a single one.
 
 solPic :: Sig -> (Sig -> Interpreter) -> Interpreter
-solPic sig eval sizes spread t = case parseSol (solAtom sig) t of
+solPic sig eval spread sizes t = case parseSol (solAtom sig) t of
                                       Just sol -> concatJust $ map f sol
                                       _ -> zero
-                                 where f = eval sig sizes spread . getTerm
+                                 where f = eval sig spread sizes . getTerm
  
 -- used by Ecom > getInterpreter
 
-linearEqs :: Sizes -> TermS -> MaybeT IO Picture 
-linearEqs sizes = f 
+linearEqs :: Interpreter
+linearEqs _ sizes = f 
           where f (F x [t]) | x `elem` words "bool gauss gaussI" = f t
                 f t = lift' $ do eqs <- parseLinEqs t
                                  jturtleP $ termMatrix sizes $ g eqs 1
@@ -2200,21 +2201,21 @@ linearEqs sizes = f
                                            str = show n
                 g _ _ = []
 
-planes :: Int -> Sizes -> TermS -> MaybeT IO Picture
-planes mode sizes t = do guard $ not $ isSum t
-                         rturtle $ drawPlanes sizes mode t
+planes :: Int -> Interpreter
+planes mode _ sizes t = do guard $ not $ isSum t
+		  	   rturtle $ drawPlanes sizes mode t
 
-alignment :: Sizes -> TermS -> MaybeT IO Picture
-alignment sizes t = lift' $ do ali <- parseAlignment t
-                               jturtleP $ drawAlignment sizes ali
+alignment :: Interpreter
+alignment _ sizes t = lift' $ do ali <- parseAlignment t
+                                 jturtleP $ drawAlignment sizes ali
 
-dissection :: TermS -> MaybeT IO Picture
-dissection (Hidden (Dissect quads)) = rturtle $ drawDissection quads
-dissection t = lift' $ do quads <- parseList parseIntQuad t
-                          jturtleP $ drawDissection quads
+dissection :: Interpreter
+dissection _ _ (Hidden (Dissect quads)) = rturtle $ drawDissection quads
+dissection _ _ t = lift' $ do quads <- parseList parseIntQuad t
+                              jturtleP $ drawDissection quads
                                    
 matrix :: Sig -> Interpreter
-matrix sig sizes spread t = hiddenMatrix sizes spread t ++ f t where
+matrix sig spread sizes t = hiddenMatrix sig spread sizes t ++ f t where
       f :: TermS -> MaybeT IO Picture
       f t | just u = do bins@(bin:_) <- lift' u
                         let (arr,k,m) = karnaugh (length bin)
@@ -2231,39 +2232,39 @@ matrix sig sizes spread t = hiddenMatrix sizes spread t ++ f t where
       f (F "wmat" [F "[]" ts]) 
                    = do trips <- mapM (lift' . parseTripT) ts
                         let (dom1,dom2) = sortDoms $ map (pr1 *** pr2) trips
-                        rturtle $ widgMatrix sig sizes spread dom1 dom2 trips 
+                        rturtle $ widgMatrix sig spread sizes dom1 dom2 trips 
       f (F "[]" ts) | just us 
-                   = rturtle $ listMatrix sizes spread dom1 dom2 trips 
+                   = rturtle $ listMatrix spread sizes dom1 dom2 trips 
                      where us = mapM parseTrip ts; trips = get us
                            (dom1,dom2) = sortDoms $ map (pr1 *** pr2) trips
       f _          = zero
 
-hiddenMatrix :: Sizes -> Pos -> TermS -> MaybeT IO Picture
-hiddenMatrix sizes _ (Hidden (BoolMat dom1 dom2 pairs@(_:_))) 
+hiddenMatrix :: Sig -> Interpreter
+hiddenMatrix _ _ sizes (Hidden (BoolMat dom1 dom2 pairs@(_:_))) 
                    = rturtle $ boolMatrix sizes dom1 dom2 pairs
-hiddenMatrix sizes _ (Hidden (TermMat trips@(_:_))) 
+hiddenMatrix _ _ sizes (Hidden (TermMat trips@(_:_))) 
                    = rturtle $ termMatrix sizes trips
-hiddenMatrix sizes spread (Hidden (ListMat dom1 dom2 trips@(_:_)))
-                   = rturtle $ listMatrix sizes spread dom1 dom2 trips
-hiddenMatrix sizes spread (Hidden (EquivMat sig trips@(_:_)))
-                   = rturtle $ listMatrix sizes spread dom dom tripsS where
+hiddenMatrix _ spread sizes (Hidden (ListMat dom1 dom2 trips@(_:_)))
+                   = rturtle $ listMatrix spread sizes dom1 dom2 trips
+hiddenMatrix _ spread sizes (Hidden (EquivMat sig trips@(_:_)))
+                   = rturtle $ listMatrix spread sizes dom dom tripsS where
                      dom = map showTerm0 $ states sig
                      tripsS = [(f i,f j,map g ps) | (i,j,ps) <- trips]
                               where f = showTerm0 . (states sig!!)
                                     g (is,js) = showTerm0 $ mkPair (h is) $ h js
                                     h = mkList . map (states sig!!)
-hiddenMatrix _ _ _ = zero                                   
+hiddenMatrix _ _ _ _ = zero                                   
          
 -- widgetTerm .. t returns the widget term that is equivalent to t.
 
-widgetTerm :: Sig -> Sizes -> Pos -> TermS -> MaybeT IO TermW       
-widgetTerm sig sizes spread = f [] where
+widgetTerm :: Sig -> Pos -> Sizes -> TermS -> MaybeT IO TermW       
+widgetTerm sig spread sizes = f [] where
         f :: [Int] -> TermS -> MaybeT IO TermW
         f p (F "<+>" ts)        = do ts <- zipWithSucsM f p ts
                                      return $ F Skip ts
         f p (F "widg" ts@(_:_)) = do let u = dropnFromPoss 1 $ last ts
                                           -- expand 0 t $ p++[length ts-1]
-                                     [w] <- widgets sig black sizes spread u
+                                     [w] <- widgets sig black spread sizes u
                                      ts <- zipWithSucsM f p $ init ts
                                      return $ F w ts
         f p (F x ts)            = do ts <- zipWithSucsM f p ts
@@ -2275,11 +2276,11 @@ widgetTerm sig sizes spread = f [] where
 -- used by widgets "tree"
 
 widgetTree :: Sig -> Interpreter
-widgetTree sig sizes spread t = do t <- widgetTerm sig sizes spread t
+widgetTree sig spread sizes t = do t <- widgetTerm sig spread sizes t
                                    return [WTree t]
                                      
 widgets :: Sig -> Color -> Interpreter
-widgets sig c sizes spread t = f c t' where
+widgets sig c spread sizes t = f c t' where
     t' = expand 0 t [] 
     next = nextColor 0 $ depth t'
     hv = fromInt2 spread 
@@ -2307,7 +2308,7 @@ widgets sig c sizes spread t = f c t' where
                                        return [updCol c w]
     f c (F "loadT" [t])           = do t <- lift $ loadTerm sig c sizes t
                                        fs c t
-    f _ (F "mat" [t])             = matrix sig sizes spread t
+    f _ (F "mat" [t])             = matrix sig spread sizes t
     f _ (F "save" [t,u])          = do pict@[w] <- f black t
                                        lift $ saveWidget w u; return pict
     f _ (F "saveT" [t,u])         = do pict@[_] <- f black t
@@ -2319,10 +2320,10 @@ widgets sig c sizes spread t = f c t' where
     f c (F "turt" [t])            = do acts <- turtActs c t
                                        return [turtle0 c acts]
     f _ (F x [t]) | just c        = f (get c) t where c = parse color x
-    f c t = concat [do w    <- lift' $ widgConst c sizes spread t; return [w],
-                    do pict <- lift' $ widgConsts sizes spread t; return pict]
+    f c t = concat [do w    <- lift' $ widgConst c spread sizes t; return [w],
+                    do pict <- lift' $ widgConsts spread sizes t; return pict]
     treeGraph mode grade t
-                   = do t <- widgetTerm sig sizes spread t
+                   = do t <- widgetTerm sig spread sizes t
                         let pict = termWToPict mode (fromInt2 spread) grade t    
                         return [Tree (st0 c) $ bunchesToArcs $ pictToGraph pict]
                         
@@ -2431,7 +2432,7 @@ widgets sig c sizes spread t = f c t' where
                            -> turtActs c $ F x [leaf "id",n]
           F x [tr,n] | x `elem` polygons 
                            -> do tr <- lift' $ widgTrans tr; n <- lpnat n
-                                 return $ polygon c x tr n
+                                 return $ polygon' c x tr n
           F "pulse" [t]    -> do [w] <- f c t; return $ pulse w
           F x [n,w] | z == "spiral"
                            -> do n <- lift' $ parsePnat n
@@ -2494,8 +2495,8 @@ turtAct (F "SC" [sc]) = do sc <- parseReal sc; Just [OpenS sc]
 turtAct (F "T" [a])   = do a <- parseReal a; Just [Turn a]
 turtAct _             = Nothing
     
-widgConst :: Color -> Sizes -> Pos -> TermS -> Maybe Widget_
-widgConst c sizes@(height,width) spread = f where
+widgConst :: Color -> Pos -> Sizes -> TermS -> Maybe Widget_
+widgConst c spread sizes@(height,width) = f where
     f (F x [])     | x `elem` trunks = Just $ mkTrunk c x
     f (F "arc" ts)                = do [w,r,a] <- mapM parseReal ts
                                        Just $ Arc (st0 c) w r a
@@ -2542,8 +2543,8 @@ widgConst c sizes@(height,width) spread = f where
     f (F "tria" [r])   = do r <- parseReal r; Just $ Tria (st0 c) r
     f _                = Nothing
 
-widgConsts :: Sizes -> Pos -> TermS -> Maybe Picture
-widgConsts sizes spread = f where
+widgConsts :: Pos -> Sizes -> TermS -> Maybe Picture
+widgConsts spread sizes = f where
     f (F "gifs" [d,n,b,h]) = do d <- parseConst d; n <- parsePnat n
                                 b <- parseReal b; h <- parseReal h
                                 let gif pos = Gif pos False d $ Rect st0B b h
@@ -2659,10 +2660,10 @@ pictTrans c = f where
                                          False $ if take 5 x == "shelf" 
                                                  then "m1" else "m2"
                case s of 
-                 d:s -> do d <- parseReal d                  -- space
+                 d:s -> do d <- parseReal d                            -- space
                            case s of 
-                                a:s -> do a <- parseChar a           -- align: 
-                                          case s of                  -- L/R/M
+                                a:s -> do a <- parseChar a             -- align: 
+                                          case s of                    -- L/R/M
                                             b:s -> do b <- parseChar b -- center
                                                       Just $ tr d a $ b == 'C'
                                             _ -> Just $ tr d a False
@@ -2891,20 +2892,20 @@ scaleWidg m sc (Fast w)     = Fast $ scaleWidg m sc w
 scaleWidg m sc (Repeat w)   = Repeat $ scaleWidg m sc w
 scaleWidg _ _ w      = w
 
-pictFrame :: Picture -> (Double,Double,Double,Double)
+pictFrame :: Picture -> Point4
 pictFrame pict = foldl f (0,0,0,0) $ indices_ pict
                  where f bds = minmax4 bds . widgFrame . (pict!!)
 
 -- widgFrame w returns the leftmost-uppermost and rightmost-lowermost
 -- coordinates of the smallest rectangle that encloses w.
 
-widgFrame :: Widget_ -> (Double,Double,Double,Double)
+widgFrame :: Widget_ -> Point4
 widgFrame (Turtle st sc acts) = turtleFrame st sc acts
 widgFrame w                   = minmax $ coords w:getHullPts True w
 
 -- used by scaleAndDraw,addFrame,shelf
 
-turtleFrame ::State -> Double -> [TurtleAct] -> (Double,Double,Double,Double)
+turtleFrame ::State -> Double -> [TurtleAct] -> Point4
 turtleFrame (p,a,_,_) sc acts = minmax $ fst $ foldl f ([p],[(p,a,sc)]) acts
  where f (ps,_:s) Close                  = (ps,s)
        f state Draw                      = state
@@ -3677,21 +3678,17 @@ convexHull ps = f $ g ps
                           where qs = drop i ps++take i ps; i = getInd ps p
        h _ _ ps         = ps
 
-upperTangent :: [(Double, Double)]
-             -> [(Double, Double)] -> ((Double, Double), (Double, Double))
+upperTangent,lowerTangent :: Path -> Path -> (Point,Point)
 upperTangent ps@(p1:_) (q1:qs@(q2:_)) 
-                              | slope p1 q1 < slope q1 q2  = upperTangent ps qs
+ | slope p1 q1 < slope q1 q2  = upperTangent ps qs
 upperTangent (p1:ps@(p2:_)) qs@(q1:_) 
-                               | slope p1 q1 <= slope p1 p2 = upperTangent ps qs
-upperTangent (p1:_) (q1:_)                                     = (p1,q1)
-
-lowerTangent :: [(Double, Double)]
-             -> [(Double, Double)] -> ((Double, Double), (Double, Double))
+ | slope p1 q1 <= slope p1 p2 = upperTangent ps qs
+upperTangent (p1:_) (q1:_)    = (p1,q1)
 lowerTangent (p1:ps@(p2:_)) qs@(q1:_) 
-                               | slope p1 q1 < slope p1 p2  = lowerTangent ps qs
+ | slope p1 q1 < slope p1 p2  = lowerTangent ps qs
 lowerTangent ps@(p1:_) (q1:qs@(q2:_)) 
-                               | slope p1 q1 <= slope q1 q2 = lowerTangent ps qs
-lowerTangent (p1:_) (q1:_)                                     = (p1,q1)
+ | slope p1 q1 <= slope q1 q2 = lowerTangent ps qs
+lowerTangent (p1:_) (q1:_)    = (p1,q1)
 
 convexPath :: Path -> Picture -> (Picture, Path)
 convexPath ps pict = if straight ps then (h ps,ps) else (h $ last qs:qs,qs)
@@ -4064,12 +4061,12 @@ fractal c "wide" n = up:f c n++[Close] where
                     h c i = acts<++>acts where acts = h (next c) $ i-1
                     next = nextColor 0 n
 
-polygon :: Color -> String -> WidgTrans -> Int -> [TurtleAct]
-polygon c "cactus" = growR (mkTrunk c "CA") [False,True,True,True]
-polygon c "hexa"   = growR (mkTrunk c "HE") $ replicate 6 True
-polygon c "pytree" = growR (mkTrunk c "PY") [False,True,True]
-polygon c "penta"  = growR (mkTrunk c "PE") $ replicate 5 True
-polygon c "pentaS" = growR (mkTrunk c "PS") [False,True,True]
+polygon' :: Color -> String -> WidgTrans -> Int -> [TurtleAct]
+polygon' c "cactus" = growR (mkTrunk c "CA") [False,True,True,True]
+polygon' c "hexa"   = growR (mkTrunk c "HE") $ replicate 6 True
+polygon' c "pytree" = growR (mkTrunk c "PY") [False,True,True]
+polygon' c "penta"  = growR (mkTrunk c "PE") $ replicate 5 True
+polygon' c "pentaS" = growR (mkTrunk c "PS") [False,True,True]
 
 -- bars and piles
 
@@ -4126,8 +4123,8 @@ boolMatrix sizes@(height,width) dom1 dom2 ps =
                             btf j = halfmax width [j]+3
                             ht = fromInt height/2+3
 
-listMatrix :: Sizes -> Pos -> [String] -> [String] -> TriplesS -> [TurtleAct]
-listMatrix sizes spread dom1 dom2 trips = 
+listMatrix :: Pos -> Sizes -> [String] -> [String] -> TriplesS -> [TurtleAct]
+listMatrix spread sizes dom1 dom2 trips = 
                       textWidgMatrix sizes dom1 dom2 $ map f trips 
                       where f (a,b,cs) = (a,b,leaf $ foldl1 g cs)
                             g c d = c++'\'':d
@@ -4145,9 +4142,9 @@ termMatrix sizes@(height,width) trips = drawMatrix sizes entry dom1 dom2 btf htf
 
 -- used by linearEqs and matrix for Karnaugh diagrams
 
-widgMatrix :: Sig -> Sizes -> Pos -> [String] -> [String] 
+widgMatrix :: Sig -> Pos -> Sizes -> [String] -> [String] 
                                   -> [(String,String,TermS)] -> [TurtleAct]
-widgMatrix sig sizes spread dom1 dom2 trips = 
+widgMatrix sig spread sizes dom1 dom2 trips = 
                                  drawMatrix sizes entry dom1 dom2 btf htf where
      entry i j = if w == Skip then [] else [widg w] where w = f i j
      f i j = case h black t of Just w -> w
@@ -4158,7 +4155,7 @@ widgMatrix sig sizes spread dom1 dom2 trips =
      h c (F x [t]) | just tr = do w <- h c t; Just $ get tr w
                                where tr = widgTrans $ leaf x
      h _ (F x [t]) | just c  = h (get c) t where c = parse color x
-     h c t                   = widgConst c sizes spread t
+     h c t                   = widgConst c spread sizes t
      htf i = (y2-y1)/2+3 where (_,y1,_,y2) = pictFrame $ g i:map (f i) dom2
      btf j = (x2-x1)/2+3 where (x1,_,x2,_) = pictFrame $ g j:map (flip f j) dom1
          

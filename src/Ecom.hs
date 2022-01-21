@@ -167,7 +167,7 @@ linearTerm = concat [do symbol "F"; x <- token quoted
 -- SOLVER messages
 
 start :: String
-start = "Welcome to Expander3 (December 1, 2021)"
+start = "Welcome to Expander3 (January 22, 2022)"
 
 startOther :: String -> String
 startOther solve = "Load and parse a term or formula in " ++ solve ++ "!"
@@ -375,8 +375,8 @@ newCls cls file = "The " ++ cls ++ str ++ file ++ " have been added."
 newCurr :: String
 newCurr = "The tree slider has been moved."
 
-newInterpreter eval t = eval ++ " is the actual widget-term interpreter. " ++
-                        showTerm0 t ++ " is applied before painting."
+newTermToPict eval t = eval ++ " is the actual widget-term interpreter. " ++
+                       showTerm0 t ++ " is applied before painting."
 
 newPredicate :: String -> String -> String -> String
 newPredicate str1 str2 x = "The " ++ str1 ++ ' ':x ++
@@ -536,8 +536,7 @@ subsumed :: String -> String
 subsumed object = "The selected tree results from the subsumption of a " ++
                    object ++ "."
 
-subtreesNarrowed :: (Eq a, Num a, Show a) =>
-                    Maybe a -> String
+subtreesNarrowed :: (Eq a, Num a, Show a) => Maybe a -> String
 subtreesNarrowed k = (case k of Just n
                                  -> if n == -1 then "Axioms are not"
                                       else "Theorem no. " ++ show n ++ " is not"
@@ -994,7 +993,7 @@ solver this solveRef enum paint = do
           mkBut nodesMenu "cycle targets" showCycleTargets
           
           interpreterMenu <- getMenu "interpreterMenu"
-          mapM_ (mkButF interpreterMenu setInterpreter) interpreters
+          mapM_ (mkButF interpreterMenu setTermToPict) interpreters
 
           sigMenu <- getMenu "sigMenu"
           but <- mkBut sigMenu (refuteMsg False) switchRefute
@@ -1788,7 +1787,7 @@ solver this solveRef enum paint = do
             gtkSet matchBut [buttonLabel := "match"]
             gtkSet splitBut [buttonLabel := "join"]
             setTreeposs $ Replace []
-            setInterpreter obj
+            setTermToPict obj
             sig <- getSignature
             let ts = case simplifyFix sig $ F "compl" [] of F "[]" us -> us
                                                             _ -> []
@@ -2897,28 +2896,6 @@ solver this solveRef enum paint = do
         separated operations are needed for open and save dialogs. Hence all
         calls of getFileAnd must be identified as load or store operation. -}
         
-        -- Used by 'showSubtreePicts' and 'showTreePicts'.
-        getInterpreter = do
-          sig <- getSignature
-          picEval <- readIORef picEvalRef
-          return $ case picEval of 
-                        "tree"               -> widgetTree sig
-                        "matrices"           -> searchPic $ matrix sig
-                        "matrix solution"    -> solPic sig matrix
-                        "linear equations"   -> leqs
-                        "level partition"    -> searchPic $ plan 0
-                        "preord partition"   -> searchPic $ plan 1
-                        "heap partition"     -> searchPic $ plan 2
-                        "hill partition"     -> searchPic $ plan 3
-                        "alignment"          -> searchPic alig
-                        "palindrome"         -> searchPic alig
-                        "dissection"         -> searchPic diss
-                        _                    -> searchPic $ widgets sig black
-          where leqs      = const . linearEqs
-                plan mode = const . planes mode
-                alig      = const . alignment 
-                diss      = const2 dissection
-        
         -- Get value of 'treeSize' scale. Used by 'drawThis'.
         getMaxHeap :: IO Int
         getMaxHeap = do val <- gtkGet treeSize rangeValue; return $ truncate val
@@ -2974,6 +2951,25 @@ solver this solveRef enum paint = do
               , valueL      = valueL
               , notSafe     = notSafe
               }
+        
+        getTermToPict = do
+          sig <- getSignature
+          picEval <- readIORef picEvalRef
+          return $ case picEval of 
+                        "tree"               -> widgetTree sig
+                        "matrices"           -> searchPic $ matrix sig
+                        "matrix solution"    -> solPic sig matrix
+                        "linear equations"   -> linearEqs
+                        "level partition"    -> searchPic $ planes 0
+                        "preord partition"   -> searchPic $ planes 1
+                        "heap partition"     -> searchPic $ planes 2
+                        "hill partition"     -> searchPic $ planes 3
+                        "alignment"          -> searchPic alignment
+                        "palindrome"         -> searchPic alignment
+                        "dissection"         -> searchPic dissection
+                        _                    -> searchPic $ widgets sig black
+                
+        -- used by showSubtreePicts,showTreePicts
         
         -- Returns content of text area. Used by 'addClauses',
         -- 'addSigMapT', 'addSpec', 'addSubst', 'applyClause', 'checkProofT',
@@ -4846,26 +4842,8 @@ solver this solveRef enum paint = do
         function as parameter, which handles the change in the button behavior.
         -}
         
-        -- Changes the picture interpreter. This determines how the painter is
-        -- handling the graph on a call.
-        -- Used by 'callEnum' and 'checkProof'. Called by interpreter button.
-        
-        setInterpreter :: String -> IO ()
-        setInterpreter eval = do
-          writeIORef picEvalRef eval
-          gtkSet interpreterLabel [labelLabel := eval]
-          str <- getEntry
-          sig <- getSignature
-          let drawFun = case parse (term sig) str of 
-                             Just t | isDefunct sig $ fst $ unCurry t -> t
-                             _ | str == "expand" -> leaf str
-                               | True            -> leaf "id"
-          writeIORef drawFunRef drawFun
-          labGreen $ newInterpreter eval drawFun
-        
         -- Used by 'changeMode', 'setDeriveMode' and 'setTreeposs'. Called by
         -- button 'matchBut'.
-        
         setNarrow :: Int -> IO ()
         setNarrow chgMatch = do
           treeposs <- readIORef treepossRef
@@ -5029,7 +5007,23 @@ solver this solveRef enum paint = do
         has become part of the glade file and will never be replaced. Instead
         of creating a new domMenu every time setSubst is called, all items
         are removed. -}
-
+        
+        -- Changes the picture interpreter. This determines how the painter is
+        -- handling the graph on a call.
+        -- Used by 'callEnum' and 'checkProof'. Called by interpreter button.
+        setTermToPict :: String -> IO ()
+        setTermToPict eval = do
+          writeIORef picEvalRef eval
+          gtkSet interpreterLabel [labelLabel := eval]
+          str <- getEntry
+          sig <- getSignature
+          let drawFun = case parse (term sig) str of 
+                             Just t | isDefunct sig $ fst $ unCurry t -> t
+                             _ | str == "expand" -> leaf str
+                               | True            -> leaf "id"
+          writeIORef drawFunRef drawFun
+          labGreen $ newTermToPict eval drawFun
+          
         -- Used by 'showSubtreePicts', 'showTreePicts', 'simplify',
         -- 'enterTree and 'narrow''.
         setTime = do
@@ -5290,7 +5284,7 @@ solver this solveRef enum paint = do
                    paintGraph t = do
                        spread <- readIORef spreadRef
                        drawFun <- readIORef drawFunRef
-                       let mkPict sizes = widgetTree sig sizes spread $
+                       let mkPict sizes = widgetTree sig spread sizes $
                                                      applyDrawFun sig drawFun t
                        pict <- runT $ mkPict sizes0
                        if nothing pict then labMag "There are no transitions."
@@ -5545,7 +5539,7 @@ solver this solveRef enum paint = do
 
         showSubtreePicts = do
           sig <- getSignature
-          eval <- getInterpreter
+          eval <- getTermToPict
           trees <- readIORef treesRef
           curr <- readIORef currRef
           treeposs <- readIORef treepossRef
@@ -5553,7 +5547,7 @@ solver this solveRef enum paint = do
           spread <- readIORef spreadRef
           let -- t = mapConsts chgDouble $ trees!!curr
               mkPicts sizes = map (f sizes) treeposs 
-              f sizes = eval sizes spread . applyDrawFun sig drawFun
+              f sizes = eval spread sizes . applyDrawFun sig drawFun
                                           . closeGraph (trees!!curr)
           font <- readIORef fontRef
           picts <- mapM runT $ mkPicts sizes0
@@ -5645,12 +5639,12 @@ solver this solveRef enum paint = do
 
         showTreePicts = do
           sig  <- getSignature
-          eval <- getInterpreter
+          eval <- getTermToPict
           drawFun <- readIORef drawFunRef
           trees <- readIORef treesRef
           spread <- readIORef spreadRef
           let mkPicts sizes = map (f sizes) trees 
-              f sizes = eval sizes spread . applyDrawFun sig drawFun
+              f sizes = eval spread sizes . applyDrawFun sig drawFun
           font <- readIORef fontRef
           picts <- mapM runT $ mkPicts sizes0
           sizes <- mkSizes canv font $ concatMap (stringsInPict . getPict) picts
@@ -6062,7 +6056,7 @@ solver this solveRef enum paint = do
                    setCurrInSolve  = setCurrInSolve,
                    setForw         = setForw,
                    setQuit         = setQuit,
-                   setInterpreterR = setInterpreter,
+                   setTermToPictR  = setTermToPict,
                    setNewTreesR    = setNewTrees,
                    setSubst        = setSubst,
                    showPicts       = showPicts,
@@ -6130,7 +6124,7 @@ enumerator solveRef = do
                 setQuit solve $ \(quit,signal) -> do
                               gtkSet quit [buttonLabel := "quit"]
                               replaceCommandButton signal quit mainQuit
-                setInterpreterR solve $ "tree"
+                setTermToPictR solve $ "tree"
                     
             getInput "alignment" = do
                 solve <- readIORef solveRef
