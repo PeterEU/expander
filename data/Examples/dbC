@@ -1,7 +1,8 @@
--- dbC by Christian Erdmann
+-- dbC inspired by by Christian Erdmann
 
-specs: modal
-defuncts: drawM
+specs:    modal
+defuncts: addTitle matTree
+fovars:   op
 
 axioms:
 
@@ -49,11 +50,13 @@ Verkaeufe -> branch[4..10] &
 term1 == project[Artikelname,Kaeufer]$Verkaeufe &
 term2 == select(Gewicht>0.4)$Artikel &
 term3 == njoin(Artikel)$Verkaeufe &
-term4 == tjoin(Name=Artikelname)(Artikel)$Verkaeufe
+term4 == tjoin(Name=Artikelname)(Artikel)$Verkaeufe &
 
+addTitle$x == tree$string(x)$widg$evalM$x &
+
+matTree(x,op,y,z) == tree$widg(widg(widg$evalM$x,widg$evalM$y,
+			            red$text$op),evalM$z)     
 terms:
 
-string(term1)$evalM$term1 <+>		
-string(term2)$evalM$term2 <+>		
-string(term3)$evalM$term3 <+>		
-string(term4)$evalM$term4 
+addTitle$term1 <+>					   -- dbC_project
+matTree$(Artikel,tjoin(Name=Artikelname),Verkaeufe,term4)  -- dbC_tjoin
