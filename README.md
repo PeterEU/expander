@@ -34,7 +34,7 @@ The [official download page](https://wiki.gnome.org/Projects/GTK+/OSX/Building) 
 $ brew install gtk+3
 $ export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig
 ```
-The last command is needed everytime the Expander3 package is build.
+The last command is needed everytime the Expander3 package is built.
 
 **Windows**
 
