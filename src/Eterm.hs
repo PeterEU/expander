@@ -1,5 +1,3 @@
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-
 {-
 Module      : Eterm (update from November 15, 2021)
 Copyright   : (c) Peter Padawitz and Jos Kusiek, 2021
