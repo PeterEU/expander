@@ -15,7 +15,7 @@ synopsis:            Expander - a formal methods presenter
 # A longer description of the package.
 description:         Expander3 is a flexible multi-purpose workbench for interactive term rewriting, graph transformation, theorem proving, constraint solving, flow graph analysis and other procedures that build up proofs or other rewrite sequences. Moreover, tailor-made interpreters display terms as two-dimensional structures ranging from trees and rooted graphs to a variety of pictorial representations that include tables, matrices, alignments, partitions, fractals and various tree-like or rectangular graph layouts. 
 
-github:              "jokusi/expander"
+github:              "petereu/expander"
 
 # URL for the project homepage or repository.
 homepage:            "http://fldit-www.cs.uni-dortmund.de/~peter/ExpNeu/Welcome.html"
@@ -27,7 +27,7 @@ author:
 
 # An email address to which users can send suggestions, bug reports, and 
 # patches.
-maintainer:          "jos.kusiek@tu-dortmund.de"
+maintainer:          "peter.padawitz@tu-dortmund.de"
 
 # A copyright notice
 # copyright:           ""
@@ -221,3 +221,4 @@ tests:
             source-dirs: srcpath/bundle/win32
       else:
         source-dirs: srcpath/unbundled
+
