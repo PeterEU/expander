@@ -70,7 +70,7 @@ data Solver = Solver
     , setCurrInSolve  :: Int -> IO ()
     , setForw         :: ButtonOpts -> IO () 
     , setQuit         :: ButtonOpts -> IO ()
-    , setInterpreterR :: String -> IO ()
+ -- , setInterpreterR :: String -> IO ()
     , setNewTreesR    :: [TermS] -> String -> IO ()
     , setSubst        :: (String -> TermS,[String]) -> IO ()
     , setTermToPictR  :: String -> IO ()
@@ -2203,7 +2203,7 @@ linearEqs _ sizes = f
 
 planes :: Int -> Interpreter
 planes mode _ sizes t = do guard $ not $ isSum t
-		  	   rturtle $ drawPlanes sizes mode t
+                           rturtle $ drawPlanes sizes mode t
 
 alignment :: Interpreter
 alignment _ sizes t = lift' $ do ali <- parseAlignment t
