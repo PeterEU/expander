@@ -29,14 +29,6 @@ import Data.Char (chr, ord, toLower, isLower, isDigit, isAlpha)
 import Data.IORef
 import Prelude hiding ((++),concat,(<*),sequence)
 
-
--- O'Haskell types
-type Action = IO ()
-type Request = IO
-type Template = IO
-type Cmd = IO
-
--- O'Haskell functions
 infixr 5 ++
 
 zero :: MonadPlus m => m a
@@ -54,13 +46,13 @@ accumulate = Haskell.sequence
 sequence :: Monad m => [m a] -> m ()
 sequence = Haskell.sequence_
 
--- O'Haskell constructs
-while :: Request Bool -> Action -> Action
+while :: IO Bool -> IO () -> IO ()
 while mb act = do
     b <- mb 
     Haskell.when b $ do
         act
         while mb act 
 
-done :: Action
+done :: IO ()
 done = return ()
+
