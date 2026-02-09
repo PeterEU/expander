@@ -679,7 +679,7 @@ periodic millisecs act = do
                      runnableStop  = do
                          maybeID <- readIORef handlerID
                          when (Haskell.isJust maybeID) $ do       -- running
-                              timeoutRemove $Haskell.fromJust maybeID
+                              timeoutRemove $ Haskell.fromJust maybeID
                               writeIORef handlerID Nothing}
 
 data MenuOpt = MenuOpt {menuFont :: Maybe String,
@@ -700,4 +700,5 @@ cascade menu label MenuOpt {menuFont = mFont, menuBackground = bg} = do
                  gtkSet item [menuItemSubmenu := subMenu, widgetVisible := True]
                  return subMenu
                  where doMaybe act (Just v) = act v
+
                        doMaybe _ Nothing    = done
