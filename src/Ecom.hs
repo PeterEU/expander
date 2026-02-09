@@ -3389,7 +3389,7 @@ solver this solveRef enum paint = do
                    u = getSubterm1 t p
                    msg = "MOVING DOWN A QUANTIFIER"
                writeIORef treesRef
-                 $ updList trees curr $replace1 t p $ moveQdown sig u
+                 $ updList trees curr $ replace1 t p $ moveQdown sig u
                extendPT MoveQuant
                setProof True False msg [p] quantifierMoved
                clearAndDraw
