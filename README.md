@@ -32,6 +32,7 @@ $ apt install libgtk-3-dev
 The [official download page](https://wiki.gnome.org/Projects/GTK+/OSX/Building) recommends to use [jhbuild](https://wiki.gnome.org/Projects/Jhbuild/Mac_OS) (see also [GTK for Mac OS](https://www.gtk.org/docs/installations/macos)). [Homebrew](https://formulae.brew.sh/formula/gtk+3) is a good alternative.
 ```
 $ brew install gtk+3
+$ brew install pkg-config
 $ export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig
 ```
 The last command is needed everytime the Expander3 package is built.
