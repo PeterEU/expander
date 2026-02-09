@@ -1490,7 +1490,6 @@ removeEq sig t =
                                   pair = f "=" xs ts
                 F ('A':'n':'y':x) ts | just $ f "=" (words x) ts
                   -> Just mkTrue
-                    | just $ f "=" (words x) ts -> Just mkTrue
                 _ -> Nothing
       where f rel xs = g [] 
               where g rest (t@(F z us@[l,r]):ts) 
