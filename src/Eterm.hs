@@ -1061,7 +1061,8 @@ lift' = maybeT . return
 -- parser monad
 
 newtype Parser a = P (Haskell.StateT String Maybe a)
-   deriving (Functor, Applicative, Monad, Haskell.Alternative, MonadPlus)
+   deriving (Functor, Applicative, Monad, MonadFail, Haskell.Alternative,
+             MonadPlus)
 
 applyPa :: Parser a -> String -> Maybe (a,String)
 applyPa (P f) = Haskell.runStateT f
@@ -5219,7 +5220,7 @@ instance Monad Result where
    OcFailed x >>= _  = OcFailed x
    ParUni a xs >>= _ = ParUni a xs
    TotUni a >>= _    = TotUni a
-   return = Def
+-- return = Def
 
 unify0 bag sig xs u redex t p = case unify bag sig xs V u redex u t [] p of
                                 Def (f,True) -> TotUni f
