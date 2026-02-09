@@ -113,7 +113,7 @@ loadPhoto pos alpha file = do
             return $ Just $ Image alpha image
           str path  = path </> (file++'_':show pos) <.> "gif"
 
-savePic :: String -> Canvas -> String -> Cmd String
+savePic :: String -> Canvas -> String -> IO String
 savePic _ = canvasSave
 
 lookupLibs :: FilePath -> IO String
@@ -157,7 +157,7 @@ html dirPath dir files
         n = length files
         f file = ",\"" ++ file ++ "\""
 
-mkHtml :: Canvas -> String -> String -> Int -> Cmd ()
+mkHtml :: Canvas -> String -> String -> Int -> IO ()
 mkHtml canv dir dirPath n = do
        _ <- savePic ".png" canv $ mkFile dirPath n
        files <- getDirectoryContents dirPath
@@ -182,3 +182,4 @@ installJavaScript = do
     where
         pix = "Pix"
         path = pix </> "Painter" <.> "js"
+
