@@ -12,14 +12,6 @@ For compiling and installing *Expander* the following tools are needed:
 * stack
 * Gtk+3
 
-### Stack ###
-Follow the installation guide [here](http://docs.haskellstack.org/en/stable/install_and_upgrade).
-
-
-### Gtk+3 ###
-
-Download with Homebrew [here](https://formulae.brew.sh/formula/gtk+3).
-
 **Linux**
 
 Most Linux distributions already have Gtk+ installed. Often development packages are needed. Visit official download page for more information. For Debian/Ubuntu:
