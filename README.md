@@ -24,7 +24,7 @@ apt install libgtk-3-dev
 ```
 curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
 brew install gtk+3
-brew install pkg-config
+brew install pkgconfig
 export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig
 ```
 (see https://www.haskell.org/ghcup and https://formulae.brew.sh/formula)
