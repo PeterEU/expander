@@ -14,23 +14,24 @@ For compiling and installing *Expander* the following tools are needed:
 
 **Linux**
 
-Most Linux distributions already have Gtk+ installed. Often development packages are needed. Visit official download page for more information. For Debian/Ubuntu:
+Most Linux distributions already have Gtk+. Often development packages are needed. Visit official download page for more information. 
+For Debian/Ubuntu:
 ```
-$ apt install libgtk-3-dev
+apt install libgtk-3-dev
 ```
 
 **Mac**
-
 ```
-$ brew install gtk+3
-$ brew install pkg-config
-$ export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig
+curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
+brew install gtk+3
+brew install pkg-config
+export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig
 ```
-The last command is needed everytime the Expander3 package is built.
+(see https://www.haskell.org/ghcup and https://formulae.brew.sh/formula)
 
 **Windows**
 
-Needs stack to be installed.
+stack must have been installed.
 ```
 stack setup
 stack exec -- pacman -Syuu
@@ -38,15 +39,13 @@ stack exec -- pacman -S pkg-config mingw-w64-x86_64-gtk3 mingw-w64-x86_64-toolch
 ```
 ## Installation ##
 
-Install expander with:
 ```
 git clone https://github.com/petereu/expander.git
+```
+Adapt stack.yaml to your ghc: https://www.stackage.org
+```
 cd expander
 stack build
-```
-
-Run expander with:
-```
 stack exec expander
 ```
 
@@ -58,10 +57,6 @@ stack build
 
 ## Important folders ##
 
-**src**
-
-source code
-
 **app**
 
 main function for expander and hilbs executables
@@ -69,6 +64,10 @@ main function for expander and hilbs executables
 **data/style**
 
 files for layout and design
+
+**src**
+
+source code
 
 ## Documents ##
 
