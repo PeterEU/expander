@@ -42,7 +42,7 @@ stack exec -- pacman -S pkg-config mingw-w64-x86_64-gtk3 mingw-w64-x86_64-toolch
 ```
 git clone https://github.com/petereu/expander.git
 ```
-Adapt stack.yaml to your ghc: https://www.stackage.org
+Adapt the resolver in stack.yaml to your ghc: https://www.stackage.org
 ```
 cd expander
 stack build
