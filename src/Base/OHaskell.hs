@@ -1,4 +1,5 @@
 {-# LANGUAGE BangPatterns #-}
+
 module Base.OHaskell
   ( module Prelude
   , module Paths
@@ -18,8 +19,7 @@ module Base.OHaskell
   , accumulate
   , sequence
   , while
-  , done
-  ) where
+  , done ) where
 
 import Paths (getDataDir)
 
@@ -47,12 +47,7 @@ sequence :: Monad m => [m a] -> m ()
 sequence = Haskell.sequence_
 
 while :: IO Bool -> IO () -> IO ()
-while mb act = do
-    b <- mb 
-    Haskell.when b $ do
-        act
-        while mb act 
+while mb act = do b <- mb; Haskell.when b $ do act; while mb act 
 
 done :: IO ()
 done = return ()
-
