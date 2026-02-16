@@ -700,6 +700,5 @@ cascade menu label MenuOpt {menuFont = mFont, menuBackground = bg} = do
                  gtkSet item [menuItemSubmenu := subMenu, widgetVisible := True]
                  return subMenu
                  where doMaybe act (Just v) = act v
-
                        doMaybe _ Nothing    = done
 
