@@ -81,7 +81,6 @@ mkFile dir i | i < 10  = enclose "00"
              | True    = enclose ""
                where enclose str = dir </> str ++ show i ++ ".png"
 
--- Customized for Expander3 to be able to load animation frames from gif.
 loadPhoto :: Int -> Bool -> FilePath -> IO (Maybe Image)
 loadPhoto pos alpha file = do
     userPath' <- userLib file'
@@ -108,7 +107,7 @@ loadPhoto pos alpha file = do
             iter <- pixbufAnimationGetIter anim (Just start)
             step <- pixbufAnimationIterGetDelayTime iter
             let time = gTimeValAdd start $ fromIntegral ((pos-1) * step * 1000)
-            _ <- pixbufAnimationIterAdvance iter (Just time)
+            pixbufAnimationIterAdvance iter (Just time)
             image <- pixbufAnimationIterGetPixbuf iter
             return $ Just $ Image alpha image
           str path  = path </> (file++'_':show pos) <.> "gif"
@@ -159,11 +158,11 @@ html dirPath dir files
 
 mkHtml :: Canvas -> String -> String -> Int -> IO ()
 mkHtml canv dir dirPath n = do
-       _ <- savePic ".png" canv $ mkFile dirPath n
+       savePic ".png" canv $ mkFile dirPath n
        files <- getDirectoryContents dirPath
        html dirPath dir [dir ++ "/" ++ file |
-                            file <- files, let lg = length file, lg > 4,
-                            drop (lg-4) file
+                         file <- files, let lg = length file-4, lg > 0,
+                         drop lg file 
                                    `elem` words ".eps .gif .jpg .pdf .png .svg"]
 
 mkSecs :: Integral a => a -> a -> a
@@ -182,4 +181,5 @@ installJavaScript = do
     where
         pix = "Pix"
         path = pix </> "Painter" <.> "js"
+
 
