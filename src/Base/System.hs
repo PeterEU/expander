@@ -169,17 +169,12 @@ mkSecs :: Integral a => a -> a -> a
 mkSecs t1 t2 = (t2-t1)`div`1001500
 
 installJavaScript :: IO ()
-installJavaScript = do
-    userDir <- userLibDir
-    dataDir <- getDataDir
-    let dest = userDir </> path
-        src = dataDir </> path
-    fileExists <- doesFileExist dest
-    when (not fileExists) $ do
-        mkDir $ userDir </> pix
-        copyFile src dest
-    where
-        pix = "Pix"
-        path = pix </> "Painter" <.> "js"
-
-
+installJavaScript = do userDir <- userLibDir
+                       dataDir <- getDataDir
+                       let dest = userDir </> path
+                           src = dataDir </> path
+                       fileExists <- doesFileExist dest
+                       when (not fileExists) $ do mkDir $ userDir </> pix
+                                                  copyFile src dest
+                    where pix = "Pix"
+                          path = pix </> "Painter" <.> "js"
