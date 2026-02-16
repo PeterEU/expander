@@ -1061,7 +1061,7 @@ lift' = maybeT . return
 -- parser monad
 
 newtype Parser a = P (Haskell.StateT String Maybe a)
-   deriving (Functor, Applicative, Monad, MonadFail, Haskell.Alternative,
+   deriving (Functor, Applicative, Monad, MonadFail, Haskell.Alternative, 
              MonadPlus)
 
 applyPa :: Parser a -> String -> Maybe (a,String)
