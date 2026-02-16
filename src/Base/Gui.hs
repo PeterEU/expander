@@ -164,10 +164,10 @@ smooth ps = spline $!! spline ps
 spline ps@(p:_:_:_) = 
     if p == last ps then spl True $!! init ps else spl False ps
     where cadd (x1,y1) (x2,y2) = (r1,r2) where !r1 = x1+x2; !r2 = y1+y2
-          spl isClosed ps = first:map f [1..resolution] ++ map g [1..9] ++
-                            [if isClosed then first else ps!!(n-1)] where
+          spl closed ps = first:map f [1..resolution] ++ map g [1..9] ++
+                          [if closed then first else last ps] where
               first = f 0; !n = length ps; !resolution = n*6
-              upb = m - if isClosed then 1 else 3 where !m = fromInt n
+              upb = m - if closed then 1 else 3 where !m = fromInt n
               f i = point $!! upb*fromInt i/fromInt resolution 
               g i = point $!! upb+fromInt i/10
               h d s = if d == 0 then 0 else s
@@ -176,9 +176,9 @@ spline ps@(p:_:_:_) =
               point v = Haskell.foldl1' cadd $!! map h [0..n-1] where
                         h i = (r1,r2) where
                               (x,y) = ps!!i; !r1 = x*z; !r2 = y*z
-                              z | isClosed && v < u i = blend1 u i $!! v-u 0+u n
-                                | isClosed            = blend1 u i v
-                                | True                = blend1 t i v 
+                              z | closed && v < u i = blend1 u i $!! v-u 0+u n
+                                | closed            = blend1 u i v
+                                | True              = blend1 t i v 
               blend1,blend2 :: (Int -> Double) -> Int -> Double -> Double
               blend1 t i v = h denom1 sum1 + h denom2 sum2
                              where a = t i; b = t $!! i+3
@@ -702,3 +702,4 @@ cascade menu label MenuOpt {menuFont = mFont, menuBackground = bg} = do
                  where doMaybe act (Just v) = act v
 
                        doMaybe _ Nothing    = done
+
