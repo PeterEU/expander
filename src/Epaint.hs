@@ -236,7 +236,7 @@ data TurtleAct = Close | Draw | Jump Double | JumpA Double | Move Double |
                   
 -- JumpA and MoveA ignore the scale of the enclosing turtle.
 -- The Int parameter of Open determines the mode of the path ending when the 
--- next Close/Draw command is reached; see drawWidget (Path0 w c i m ps).
+-- next Close/Draw command is reached; see drawWidget (Path0 c i m ps).
 -- Widg False w ignores the orientation of w.
 -- Widg True w adds it to the orientation of the enclosing turtle.
 -- Close and Draw create the path that starts at the preceding Open command. 
@@ -258,11 +258,11 @@ isWidg (Rect _ _ _)   = True
 isWidg (Tria _ _)     = True    
 isWidg _              = False
 isPict (Poly _ m _ _) = m > 3           -- polyR/L/T/LT 
-isPict (Turt _ _ _)   = True
+isPict (Turtle _ _ _) = True
 isPict _              = False    
-isTree (Tree _ _ _)   = True
+isTree (Tree _ _)     = True
 isTree _              = False
-isTurt (Turt _ _ _)   = True
+isTurt (Turtle _ _ _) = True
 isTurt _              = False
 isFast (Fast _)       = True
 isFast _              = False
