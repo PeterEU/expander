@@ -1,5 +1,5 @@
 {-
-Module      : Epaint (update from November 15, 2021)
+Module      : Epaint (update from January 22, 2022)
 Copyright   : (c) Peter Padawitz and Jos Kusiek, 2021
 License     : BSD3
 Stability   : experimental
@@ -70,7 +70,6 @@ data Solver = Solver
     , setCurrInSolve  :: Int -> IO ()
     , setForw         :: ButtonOpts -> IO () 
     , setQuit         :: ButtonOpts -> IO ()
- -- , setInterpreterR :: String -> IO ()
     , setNewTreesR    :: [TermS] -> String -> IO ()
     , setSubst        :: (String -> TermS,[String]) -> IO ()
     , setTermToPictR  :: String -> IO ()
@@ -124,6 +123,7 @@ runner2 act bound = do
                   if n < bound then modifyIORef nRef succ else stopRun0
         stopRun0 = readIORef runRef >>= runnableStop
     return Runner {startRun = startRun, stopRun0 = stopRun0}
+    
 -- used by Ecom > saveGraph
 
 switcher :: IO () -> IO () -> IO Runner                      -- not used
@@ -155,6 +155,7 @@ oscillator actUp actDown lwb width upb = do
                   when (val < lwb || val > upb) (writeIORef upRef (not up))
     return Runner {startRun = startRun, 
                    stopRun0 = readIORef runRef >>= runnableStop}
+                   
 -- used by Epaint and Ecom > labRed
 
 data Scanner = Scanner {startScan0 :: Int -> Picture -> IO (),
@@ -221,12 +222,11 @@ data Widget_ = Arc State Double Double Double | Bunch Widget_ [Int] |
                Path0 Double Color Int Int Path | 
                Poly State Int [Double] Double | Rect State Double Double | 
                Repeat Widget_ | Skip | Slice State ArcStyleType Double Double |
-               Tree State Graph | Turtle State Double [TurtleAct] | WTree TermW 
-               deriving (Read,Show,Eq)
+               Tree State Graph | Turtle State Double [TurtleAct] | 
+               WTree TermW deriving (Read,Show,Eq)
 
 -- Bunch combines a widget with the list of the target indices of w.
 -- The Int parameter of Text_ is the text height.
--- The center of Tree .. ct agrees with the root of ct.
 -- Wtree ocurs only as a singeton picture: WTree in pict ==> pict = [Wtree t]
 
 data TurtleAct = Close | Draw | Jump Double | JumpA Double | Move Double | 
@@ -236,11 +236,12 @@ data TurtleAct = Close | Draw | Jump Double | JumpA Double | Move Double |
                   
 -- JumpA and MoveA ignore the scale of the enclosing turtle.
 -- The Int parameter of Open determines the mode of the path ending when the 
--- next Close/Draw command is reached; see drawWidget (Path0 c i m ps).
+-- next Close/Draw command is reached; see drawWidget (Path0 w c i m ps).
 -- Widg False w ignores the orientation of w.
 -- Widg True w adds it to the orientation of the enclosing turtle.
--- Close and Draw finish a polygon resp. path starting at the preceding Open 
--- command.
+-- Close and Draw create the path that starts at the preceding Open command. 
+-- Close returns to the state before the Open command, while Draw proceeds from
+-- the current state.
 
 type WidgTrans = Widget_ -> Widget_
 type PictTrans = Picture -> Picture
@@ -257,11 +258,11 @@ isWidg (Rect _ _ _)   = True
 isWidg (Tria _ _)     = True    
 isWidg _              = False
 isPict (Poly _ m _ _) = m > 3           -- polyR/L/T/LT 
-isPict (Turtle _ _ _) = True
+isPict (Turt _ _ _)   = True
 isPict _              = False    
-isTree (Tree _ _)     = True
+isTree (Tree _ _ _)   = True
 isTree _              = False
-isTurt (Turtle _ _ _) = True
+isTurt (Turt _ _ _)   = True
 isTurt _              = False
 isFast (Fast _)       = True
 isFast _              = False
