@@ -57,17 +57,13 @@ stack build
 
 ## Important folders ##
 
-**app**
+**app & src**
 
-main function for expander and hilbs executables
+Haskell source
 
-**data/style**
+**data**
 
-files for layout and design
-
-**src**
-
-source code
+input, output, design
 
 ## Documents ##
 
