@@ -49,12 +49,6 @@ stack build
 stack exec expander
 ```
 
-Update expander with:
-```
-git pull
-stack build
-```
-
 ## Important folders ##
 
 **app & src**
