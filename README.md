@@ -61,4 +61,4 @@ input, output, design
 
 ## Documents ##
 
-https://padawitz.de/expander3.html
+http://padawitz.de/expander3.html
