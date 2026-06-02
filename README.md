@@ -61,4 +61,4 @@ input, output, design
 
 ## Documents ##
 
-https://fldit-www.cs.tu-dortmund.de/~peter/expander3.html
+http://padawitz.de/expander3.html
