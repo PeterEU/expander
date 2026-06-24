@@ -51,10 +51,6 @@ extra-source-files:
 - README.md
 
 flags:
-  hilbs:
-    description: "Build with hilbs executable."
-    manual: false
-    default: false
   bundle:
     description: "Make data path relative for Win32 or OSX bundles."
     manual: false
@@ -119,34 +115,6 @@ executables:
       - -fno-warn-type-defaults
       - -fno-warn-unused-do-bind
       - -fno-warn-type-defaults
-  hilbs:
-    source-dirs:      app
-    main:             hilbs.hs
-    ghc-options:
-    - -threaded
-    - -rtsopts=none
-    - -with-rtsopts=-N
-    dependencies:
-    - base
-    - expander
-    - transformers
-    other-extensions:
-    - BangPatterns
-    when:
-    - condition: os(windows)
-      ld-options:
-      - -mwindows
-      - win/icon.o
-    - condition: flag(more-warnings)
-      ghc-options:
-      - -Wall
-      - -fno-warn-name-shadowing
-      - -fno-warn-type-defaults
-      - -fno-warn-unused-do-bind
-      - -fno-warn-type-defaults
-    - condition: "!flag(hilbs)"
-      buildable: false
-
 
 benchmarks:
   expander-bench:
@@ -221,4 +189,3 @@ tests:
             source-dirs: srcpath/bundle/win32
       else:
         source-dirs: srcpath/unbundled
-
