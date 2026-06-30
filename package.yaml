@@ -80,6 +80,7 @@ library:
   - transformers
   - mtl
   - array
+  - bytestring
   - base >= 4.8 && < 5.0
   - cairo
   - glib
